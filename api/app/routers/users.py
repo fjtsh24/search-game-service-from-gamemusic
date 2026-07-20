@@ -1,10 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException
+import json
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 import httpx
 
 from app.config import settings
 from app.db import get_db
 from app.session import require_session
+from app import cache
 
 router = APIRouter()
 
@@ -110,13 +112,19 @@ async def rate_game(
         },
         on_conflict="user_id,game_id",
     ).execute()
+    await cache.delete(f"feed:{session['user_id']}")
     return {"ok": True}
 
 
 @router.get("/me/feed")
-async def get_feed(limit: int = 20, session: dict = Depends(require_session)):
-    db = get_db()
+async def get_feed(limit: int = Query(default=20, le=100), session: dict = Depends(require_session)):
     user_id = session["user_id"]
+    cache_key = f"feed:{user_id}"
+    cached = await cache.get(cache_key)
+    if cached:
+        return json.loads(cached)
+
+    db = get_db()
 
     rated = (
         db.table("user_games")
@@ -169,4 +177,7 @@ async def get_feed(limit: int = 20, session: dict = Depends(require_session)):
         .execute()
     )
     order = {gid: i for i, gid in enumerate(top_ids)}
-    return sorted(games.data, key=lambda g: order.get(g["id"], 999))
+    result = sorted(games.data, key=lambda g: order.get(g["id"], 999))
+
+    await cache.set(cache_key, result, ex=600)
+    return result

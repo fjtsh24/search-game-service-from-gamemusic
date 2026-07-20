@@ -1,12 +1,16 @@
+import Link from "next/link";
 import { api } from "@/app/lib/api";
-import GameCard from "@/app/components/GameCard";
+import FeedSection from "@/app/components/FeedSection";
 
 export default async function Home() {
-  const games = await api.listGames(undefined, 20).catch(() => []);
+  const [games, tags] = await Promise.all([
+    api.listGames(undefined, 20).catch(() => []),
+    api.listTags().catch(() => []),
+  ]);
 
   return (
-    <div>
-      <section className="mb-12 text-center">
+    <div className="space-y-12">
+      <section className="text-center">
         <h1 className="text-4xl font-bold tracking-tight text-white">
           音楽の雰囲気で<br className="sm:hidden" />ゲームを探す
         </h1>
@@ -15,20 +19,27 @@ export default async function Home() {
         </p>
       </section>
 
-      <section>
-        <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-white/40">
-          データベース収録タイトル
-        </h2>
-        {games.length === 0 ? (
-          <p className="text-white/40">データを読み込み中...</p>
-        ) : (
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-            {games.map((game) => (
-              <GameCard key={game.id} game={game} />
+      {tags.length > 0 && (
+        <section>
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-white/40">
+            雰囲気で探す
+          </h2>
+          <div className="flex flex-wrap gap-2">
+            {tags.map((tag) => (
+              <Link
+                key={tag.id}
+                href={`/tags/${tag.id}`}
+                className="rounded-full border border-white/20 px-4 py-1.5 text-sm text-white/70 hover:border-white/40 hover:text-white transition-colors"
+              >
+                {tag.name_ja ?? tag.name}
+              </Link>
             ))}
           </div>
-        )}
-      </section>
+        </section>
+      )}
+
+      {/* ログイン時はパーソナライズドフィード、未ログイン時はゲーム一覧 */}
+      {games.length > 0 && <FeedSection fallbackGames={games} />}
     </div>
   );
 }

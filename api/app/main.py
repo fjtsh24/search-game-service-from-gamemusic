@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import games, composers, search, users, auth
+from app.routers import games, composers, search, users, auth, tags
 from app import cache
 
 
@@ -25,6 +25,7 @@ app.add_middleware(
 app.include_router(search.router,    prefix="/search",    tags=["search"])
 app.include_router(games.router,     prefix="/games",     tags=["games"])
 app.include_router(composers.router, prefix="/composers", tags=["composers"])
+app.include_router(tags.router,      prefix="/tags",      tags=["tags"])
 app.include_router(users.router,     prefix="/users",     tags=["users"])
 app.include_router(auth.router,      prefix="/auth",      tags=["auth"])
 
