@@ -8,7 +8,7 @@ router = APIRouter()
 
 
 @router.get("")
-async def list_games(tag_id: str | None = Query(default=None), limit: int = 20):
+async def list_games(tag_id: str | None = Query(default=None), limit: int = Query(default=20, le=100)):
     cache_key = f"games:list:{tag_id or 'all'}:{limit}"
     cached = await cache.get(cache_key)
     if cached:
@@ -65,7 +65,7 @@ async def get_game(game_id: str):
 
 
 @router.get("/{game_id}/similar")
-async def get_similar_games(game_id: str, limit: int = 8):
+async def get_similar_games(game_id: str, limit: int = Query(default=8, le=50)):
     cache_key = f"games:similar:{game_id}:{limit}"
     cached = await cache.get(cache_key)
     if cached:

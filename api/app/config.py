@@ -24,6 +24,7 @@ class Settings(BaseSettings):
 
     session_secret: str = "dev-secret-change-in-production"
     frontend_url: str = "http://localhost:3000"
+    environment: str = "development"
 
     class Config:
         env_file = str(_ROOT / ".env")
