@@ -84,6 +84,7 @@ export const authApi = {
   importLibrary: () =>
     authFetch<LibraryImportResult>("/users/me/library/import", { method: "POST" }),
   getLibrary: () => authFetch<UserGame[]>("/users/me/library"),
+  getFeed: () => authFetch<Game[]>("/users/me/feed"),
   rateGame: (gameId: string, rating: number) =>
     authFetch<{ ok: boolean }>(`/users/me/games/${gameId}/rating`, {
       method: "POST",
@@ -111,5 +112,5 @@ export const api = {
     apiFetch<Composer>(`/composers/${id}`),
 
   listTags: () =>
-    apiFetch<Tag[]>(`/games?limit=0`),
+    apiFetch<Tag[]>(`/tags`),
 };
