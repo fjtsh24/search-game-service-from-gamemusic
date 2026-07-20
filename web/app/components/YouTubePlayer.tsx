@@ -13,7 +13,18 @@ export default function YouTubePlayer({ tracks, gameTitle }: Props) {
   const playable = tracks.filter((t) => t.youtube_video_id);
   const [activeIndex, setActiveIndex] = useState(0);
 
-  if (playable.length === 0) return null;
+  if (playable.length === 0) {
+    return (
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-white/40">
+          サウンドトラック
+        </h2>
+        <div className="aspect-video w-full max-w-2xl rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center">
+          <p className="text-sm text-white/30">動画を準備中です</p>
+        </div>
+      </section>
+    );
+  }
 
   const active = playable[activeIndex];
   const composers = active.track_composers

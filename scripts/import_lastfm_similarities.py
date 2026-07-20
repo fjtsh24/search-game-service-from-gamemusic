@@ -59,7 +59,7 @@ def get_composer_by_name(name: str, composers: list[dict]) -> dict | None:
 def run():
     composers = get_all_composers()
     if not composers:
-        print("作曲家データがありません。先に import_musicbrainz.py を実行してください。")
+        print("作曲家データがありません。先に import_steam_soundtracks.py を実行してください。")
         return
 
     print(f"{len(composers)} 件の作曲家について類似度を取得します...")
