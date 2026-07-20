@@ -2,7 +2,7 @@ name: Daily Data Import
 
 on:
   schedule:
-    # 毎日 JST 10:00（UTC 01:00）に実行
+    # 毎日 JST 10:00（UTC 01:00）に実行（youtube ジョブのみ）
     - cron: '0 1 * * *'
   workflow_dispatch:
     inputs:
@@ -14,11 +14,16 @@ on:
         options:
           - youtube
           - steam
-          - musicbrainz
+          - game_tags
+          - lastfm_similarities
       limit:
         description: '処理件数の上限'
         required: false
         default: '100'
+      phase:
+        description: 'youtube ジョブのフェーズ (1=既存補完, 2=新規作成, all=両方)'
+        required: false
+        default: 'all'
 
 env:
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -31,7 +36,7 @@ env:
 
 jobs:
   youtube:
-    name: YouTube 動画 ID 補充
+    name: YouTube 動画 ID 補充（既存補完 + 新規作成）
     # schedule 時 または手動で youtube を選択した場合に実行
     if: github.event_name == 'schedule' || inputs.job == 'youtube'
     runs-on: ubuntu-latest
@@ -50,8 +55,9 @@ jobs:
       - name: Run YouTube import
         run: |
           LIMIT=${{ inputs.limit || '100' }}
-          echo "処理件数: ${LIMIT}"
-          python3 scripts/import_youtube_video_ids.py --limit "${LIMIT}"
+          PHASE=${{ inputs.phase || 'all' }}
+          echo "処理件数: ${LIMIT} / フェーズ: ${PHASE}"
+          python3 scripts/import_youtube_video_ids.py --limit "${LIMIT}" --phase "${PHASE}"
 
   steam:
     name: Steam サントラ追加登録
@@ -74,9 +80,9 @@ jobs:
           LIMIT=${{ inputs.limit || '100' }}
           python3 scripts/import_steam_soundtracks.py --limit "${LIMIT}"
 
-  musicbrainz:
-    name: MusicBrainz 作曲家データ補完
-    if: inputs.job == 'musicbrainz'
+  game_tags:
+    name: Last.fm ゲームタグ付与
+    if: inputs.job == 'game_tags'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -90,7 +96,26 @@ jobs:
       - name: Install dependencies
         run: pip install -r scripts/requirements.txt
 
-      - name: Run MusicBrainz import
+      - name: Run game tags import
         run: |
-          LIMIT=${{ inputs.limit || '50' }}
-          python3 scripts/import_musicbrainz.py --limit "${LIMIT}"
+          LIMIT=${{ inputs.limit || '200' }}
+          python3 scripts/import_game_tags.py --limit "${LIMIT}"
+
+  lastfm_similarities:
+    name: Last.fm 作曲家間類似度更新
+    if: inputs.job == 'lastfm_similarities'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: scripts/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Run Last.fm similarities import
+        run: python3 scripts/import_lastfm_similarities.py
