@@ -113,4 +113,7 @@ export const api = {
 
   listTags: () =>
     apiFetch<Tag[]>(`/tags`),
+
+  getTag: (id: string) =>
+    apiFetch<Tag>(`/tags/${id}`),
 };

@@ -10,36 +10,38 @@ export default async function Home() {
 
   return (
     <div className="space-y-12">
+      {/* ヒーロー：サービスの価値を動機に語りかける */}
       <section className="text-center">
         <h1 className="text-4xl font-bold tracking-tight text-white">
-          音楽の雰囲気で<br className="sm:hidden" />ゲームを探す
+          あのゲームに似た<br className="sm:hidden" />音楽を探そう
         </h1>
-        <p className="mt-4 text-white/50">
-          好きな作曲家やサウンドトラックの雰囲気から、新しいゲームを発見しよう
+        <p className="mt-3 text-white/50">
+          好きなゲームや作曲家を検索して、音楽的に似た新しいゲームを発見できます
         </p>
       </section>
 
+      {/* メインコンテンツ：ゲーム一覧 / パーソナライズドフィード（タグより先に表示） */}
+      {games.length > 0 && <FeedSection fallbackGames={games} />}
+
+      {/* サブ導線：タグで雰囲気から探す */}
       {tags.length > 0 && (
         <section>
           <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-white/40">
-            雰囲気で探す
+            または雰囲気で探す
           </h2>
           <div className="flex flex-wrap gap-2">
             {tags.map((tag) => (
               <Link
                 key={tag.id}
                 href={`/tags/${tag.id}`}
-                className="rounded-full border border-white/20 px-4 py-1.5 text-sm text-white/70 hover:border-white/40 hover:text-white transition-colors"
+                className="rounded-full border border-white/20 px-4 py-1.5 text-sm text-white/70 hover:border-indigo-400/60 hover:bg-indigo-500/10 hover:text-white transition-colors"
               >
-                {tag.name_ja ?? tag.name}
+                # {tag.name_ja ?? tag.name}
               </Link>
             ))}
           </div>
         </section>
       )}
-
-      {/* ログイン時はパーソナライズドフィード、未ログイン時はゲーム一覧 */}
-      {games.length > 0 && <FeedSection fallbackGames={games} />}
     </div>
   );
 }

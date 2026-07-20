@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { authApi, User } from "@/app/lib/api";
 
@@ -12,7 +13,7 @@ export default function AuthButton() {
     authApi.getMe().then(setUser).catch(() => setUser(null));
   }, []);
 
-  // ロード中は非表示（レイアウトシフトを防ぐ）
+  // ロード中はレイアウトシフトを防ぐプレースホルダー
   if (user === undefined) return <div className="w-28" />;
 
   if (!user) {
@@ -27,14 +28,21 @@ export default function AuthButton() {
   }
 
   return (
-    <div className="flex shrink-0 items-center gap-3">
-      {user.avatar_url && (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={user.avatar_url} alt="" className="h-7 w-7 rounded-full" />
-      )}
-      <span className="max-w-[120px] truncate text-sm text-white/60">
-        {user.display_name ?? user.steam_id}
-      </span>
+    <div className="flex shrink-0 items-center gap-2">
+      {/* アバター + 表示名 → /library へのリンク */}
+      <Link
+        href="/library"
+        className="flex items-center gap-2 rounded-full px-2 py-1 hover:bg-white/10 transition-colors"
+        title="マイライブラリ"
+      >
+        {user.avatar_url && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={user.avatar_url} alt="" className="h-7 w-7 rounded-full" />
+        )}
+        <span className="max-w-[100px] truncate text-sm text-white/60 hover:text-white/90 transition-colors">
+          {user.display_name ?? user.steam_id}
+        </span>
+      </Link>
       <button
         onClick={async () => {
           await authApi.logout();

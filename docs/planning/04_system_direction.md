@@ -18,7 +18,7 @@
 
 | 層 | 採用技術 | 採用理由の核心 |
 |---|---|---|
-| フロント | Next.js 15 + TypeScript | ラジオモードのグローバルプレーヤーをApp Routerで自然に実装 |
+| フロント | Next.js 15 + TypeScript | App Router による SSR + streaming。ラジオモード（グローバルプレーヤー）は Zustand/Context が必要なため V2 対応 |
 | バック | Python + FastAPI | 将来のML音楽分析が同一言語で完結。Swagger UIがOSS参入障壁を下げる |
 | DB | PostgreSQL（Supabase） | pgvectorで将来のベクトル検索を同一DBに統合。RLSで最小権限原則を強制 |
 | キャッシュ | Upstash Redis | 管理ゼロのサーバーレス課金。APIレートリミット管理に活用 |

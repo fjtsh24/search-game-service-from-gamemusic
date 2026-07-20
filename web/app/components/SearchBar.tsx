@@ -10,6 +10,7 @@ export default function SearchBar() {
   const [composers, setComposers] = useState<Composer[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [searched, setSearched] = useState(false); // 検索が完了したかどうか
   const router = useRouter();
   const ref = useRef<HTMLDivElement>(null);
 
@@ -22,7 +23,14 @@ export default function SearchBar() {
   }, []);
 
   useEffect(() => {
-    if (query.length < 2) { setGames([]); setComposers([]); setOpen(false); return; }
+    if (query.length < 2) {
+      setGames([]);
+      setComposers([]);
+      setOpen(false);
+      setSearched(false);
+      return;
+    }
+    setSearched(false);
     const timer = setTimeout(async () => {
       setLoading(true);
       try {
@@ -32,8 +40,11 @@ export default function SearchBar() {
         ]);
         setGames(g.slice(0, 5));
         setComposers(c.slice(0, 3));
+        setSearched(true);
         setOpen(true);
-      } catch { /* ignore */ } finally {
+      } catch {
+        // ignore
+      } finally {
         setLoading(false);
       }
     }, 300);
@@ -41,6 +52,7 @@ export default function SearchBar() {
   }, [query]);
 
   const hasResults = games.length > 0 || composers.length > 0;
+  const showEmpty = searched && !loading && !hasResults && query.length >= 2;
 
   return (
     <div ref={ref} className="relative w-full max-w-xl">
@@ -57,8 +69,25 @@ export default function SearchBar() {
         )}
       </div>
 
-      {open && hasResults && (
+      {open && (hasResults || showEmpty) && (
         <div className="absolute z-50 mt-2 w-full rounded-2xl border border-white/10 bg-zinc-900 shadow-2xl overflow-hidden">
+          {/* ゼロ件表示 */}
+          {showEmpty && (
+            <div className="px-4 py-5 text-sm text-white/40">
+              <p>「{query}」に一致するゲーム・作曲家が見つかりませんでした</p>
+              <p className="mt-1 text-xs">
+                別のキーワードを試すか、
+                <button
+                  onClick={() => { setOpen(false); setQuery(""); }}
+                  className="underline underline-offset-2 hover:text-white/60"
+                >
+                  タグで雰囲気から探す
+                </button>
+              </p>
+            </div>
+          )}
+
+          {/* ゲーム結果 */}
           {games.length > 0 && (
             <div>
               <p className="px-4 pt-3 pb-1 text-xs font-semibold uppercase tracking-wider text-white/40">ゲーム</p>
@@ -69,13 +98,17 @@ export default function SearchBar() {
                   className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm text-white hover:bg-white/10"
                 >
                   <span className="truncate">{g.title}</span>
-                  {g.release_year && <span className="ml-auto shrink-0 text-xs text-white/40">{g.release_year}</span>}
+                  {g.release_year && (
+                    <span className="ml-auto shrink-0 text-xs text-white/40">{g.release_year}</span>
+                  )}
                 </button>
               ))}
             </div>
           )}
+
+          {/* 作曲家結果 */}
           {composers.length > 0 && (
-            <div className="border-t border-white/10">
+            <div className={games.length > 0 ? "border-t border-white/10" : ""}>
               <p className="px-4 pt-3 pb-1 text-xs font-semibold uppercase tracking-wider text-white/40">作曲家</p>
               {composers.map((c) => (
                 <button

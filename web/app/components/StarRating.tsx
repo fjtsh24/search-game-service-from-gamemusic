@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { authApi } from "@/app/lib/api";
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
 type Props = {
   gameId: string;
   initialRating?: number;
@@ -12,17 +14,17 @@ export default function StarRating({ gameId, initialRating }: Props) {
   const [rating, setRating] = useState(initialRating ?? 0);
   const [hover, setHover] = useState(0);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(false);
+  const [loginRequired, setLoginRequired] = useState(false);
 
   const handleRate = async (star: number) => {
     if (saving) return;
     setSaving(true);
-    setError(false);
+    setLoginRequired(false);
     try {
       await authApi.rateGame(gameId, star);
       setRating(star);
     } catch {
-      setError(true);
+      setLoginRequired(true);
     } finally {
       setSaving(false);
     }
@@ -47,9 +49,15 @@ export default function StarRating({ gameId, initialRating }: Props) {
           </button>
         ))}
       </div>
-      {error && (
-        <p className="text-xs text-red-400">
-          ログインが必要です
+      {loginRequired && (
+        <p className="text-xs text-white/50">
+          <a
+            href={`${API_URL}/auth/steam`}
+            className="text-indigo-400 underline underline-offset-2 hover:text-indigo-300"
+          >
+            Steam でログイン
+          </a>
+          すると評価できます
         </p>
       )}
     </div>
