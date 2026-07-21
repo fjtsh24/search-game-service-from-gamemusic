@@ -62,7 +62,7 @@ export type Composer = {
 };
 
 async function apiFetch<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, { next: { revalidate: 300 } });
+  const res = await fetch(`${API_URL}${path}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`API error: ${res.status} ${path}`);
   return res.json();
 }
@@ -93,6 +93,9 @@ export const authApi = {
       method: "POST",
       body: JSON.stringify({ rating }),
     }),
+
+  flagVideo: (gameId: string) =>
+    authFetch<{ flagged: boolean }>(`/games/${gameId}/flag-video`, { method: "POST" }),
 };
 
 export const api = {
@@ -102,8 +105,12 @@ export const api = {
   searchComposers: (q: string) =>
     apiFetch<Composer[]>(`/search/composers?q=${encodeURIComponent(q)}`),
 
-  listGames: (tagId?: string, limit = 20) =>
-    apiFetch<Game[]>(`/games${tagId ? `?tag_id=${tagId}&limit=${limit}` : `?limit=${limit}`}`),
+  listGames: (tagId?: string, limit = 20, random = false) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (tagId) params.set("tag_id", tagId);
+    if (random) params.set("random", "true");
+    return apiFetch<Game[]>(`/games?${params}`);
+  },
 
   getGame: (id: string) =>
     apiFetch<GameDetail>(`/games/${id}`),

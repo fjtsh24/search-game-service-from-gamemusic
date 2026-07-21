@@ -4,12 +4,14 @@
 
 検索順:
   1. album.search でゲームタイトルに一致するアルバムを探し、最上位のタグを取得
-  2. それも失敗 → スキップ
+  2. それも失敗 → games.tags_locked = TRUE をセットしてスキップ（以後の日次バッチで再試行しない）
 
 MusicBrainz は精度が低いため廃止済み。
 
 使い方:
   python3 scripts/import_game_tags.py [--limit 200] [--overwrite]
+
+  --overwrite を指定すると tags_locked フラグを無視して全ゲームを再試行する。
 
 依存:
   pip install requests python-dotenv supabase
@@ -60,7 +62,6 @@ def clear_cache(tagged_game_ids: list[str], tagged_tag_ids: list[str]) -> None:
 
     if not keys:
         return
-    # Upstash REST: DEL key1 key2 ...
     url = f"{UPSTASH_REDIS_URL}/del/{'/'.join(keys)}"
     try:
         resp = requests.get(url, headers=headers, timeout=5)
@@ -146,7 +147,6 @@ def fetch_album_tags(album: str, artist: str) -> list[dict]:
     if "error" in data:
         return []
     tags = data.get("toptags", {}).get("tag", []) or []
-    # "All" などのメタタグを除外（count=100 で固定されるLast.fm内部タグ）
     return [t for t in tags if t.get("name", "").lower() not in ("all",)]
 
 
@@ -185,21 +185,30 @@ def map_to_mood_tags(tag_list: list[dict], mood_tag_index: dict[str, dict]) -> l
 
 # ── DB 操作 ───────────────────────────────────────────────────────────────────
 
-def get_games_without_tags(limit: int) -> list[dict]:
-    """game_tags が 0 件のゲームを取得。"""
-    all_games = (
-        db.table("games")
-        .select("id, title")
-        .limit(limit * 2)
-        .execute()
-        .data or []
-    )
+def get_games_without_tags(limit: int, overwrite: bool) -> list[dict]:
+    """タグ付け対象ゲームを取得。
+    overwrite=False の場合、tags_locked=TRUE のゲームはスキップする。
+    """
+    query = db.table("games").select("id, title")
+    if not overwrite:
+        query = query.eq("tags_locked", False)
+
+    all_games = query.limit(limit * 2).execute().data or []
+
+    if overwrite:
+        return all_games[:limit]
+
     tagged_ids = {
         row["game_id"]
         for row in (db.table("game_tags").select("game_id").execute().data or [])
     }
     result = [g for g in all_games if g["id"] not in tagged_ids]
     return result[:limit]
+
+
+def lock_game_tags(game_id: str) -> None:
+    """tags_locked = TRUE をセット。以後の日次バッチでスキップされる。"""
+    db.table("games").update({"tags_locked": True}).eq("id", game_id).execute()
 
 
 # ── メインループ ───────────────────────────────────────────────────────────────
@@ -209,16 +218,7 @@ def run(limit: int, overwrite: bool) -> None:
     mood_tag_index: dict[str, dict] = {row["name"]: row for row in mood_tags_rows}
     print(f"mood_tags: {len(mood_tag_index)} 件ロード済み\n")
 
-    if overwrite:
-        games = (
-            db.table("games")
-            .select("id, title")
-            .limit(limit)
-            .execute()
-            .data or []
-        )
-    else:
-        games = get_games_without_tags(limit)
+    games = get_games_without_tags(limit, overwrite)
 
     if not games:
         print("タグ付け対象のゲームがありません。")
@@ -226,27 +226,31 @@ def run(limit: int, overwrite: bool) -> None:
 
     print(f"{len(games)} 件のゲームにタグを付与します...\n")
     total_tagged = 0
-    total_skipped = 0
+    total_locked = 0
     tagged_game_ids: list[str] = []
     tagged_tag_ids: list[str] = []
+    locked_titles: list[str] = []
 
     for i, game in enumerate(games, 1):
         title = game["title"]
         print(f"[{i}/{len(games)}] {title}")
 
-        # album.search でアルバムを探す
         album_match = search_album(title)
         if not album_match:
-            print("  → Last.fm アルバム見つからず、スキップ")
-            total_skipped += 1
+            print("  → Last.fm アルバム見つからず → locked")
+            lock_game_tags(game["id"])
+            locked_titles.append(title)
+            total_locked += 1
             print()
             continue
 
         album_name, artist_name = album_match
         tags = fetch_album_tags(album_name, artist_name)
         if not tags:
-            print(f"  → アルバム '{album_name}' / '{artist_name}' タグなし、スキップ")
-            total_skipped += 1
+            print(f"  → アルバム '{album_name}' タグなし → locked")
+            lock_game_tags(game["id"])
+            locked_titles.append(title)
+            total_locked += 1
             print()
             continue
 
@@ -255,8 +259,10 @@ def run(limit: int, overwrite: bool) -> None:
         mapped = map_to_mood_tags(tags, mood_tag_index)
         if not mapped:
             top = [t["name"] for t in tags[:5]]
-            print(f"  → ムードタグにマッチせず（タグ例: {top}）")
-            total_skipped += 1
+            print(f"  → ムードタグにマッチせず（タグ例: {top}）→ locked")
+            lock_game_tags(game["id"])
+            locked_titles.append(title)
+            total_locked += 1
             print()
             continue
 
@@ -275,8 +281,11 @@ def run(limit: int, overwrite: bool) -> None:
         total_tagged += 1
         print()
 
-    print(f"完了 — タグ付与: {total_tagged} 件, スキップ: {total_skipped} 件")
-    print("注: Last.fm のインディーゲームカバレッジは限られます。")
+    print(f"完了 — タグ付与: {total_tagged} 件, locked 追加: {total_locked} 件")
+    if locked_titles:
+        print("  locked ゲーム（再試行するには tags_locked=FALSE に更新）:")
+        for t in locked_titles:
+            print(f"    - {t}")
 
     if tagged_game_ids:
         clear_cache(tagged_game_ids, list(set(tagged_tag_ids)))
@@ -289,6 +298,6 @@ if __name__ == "__main__":
     parser.add_argument("--limit", type=int, default=200,
                         help="処理するゲーム数 (デフォルト: 200)")
     parser.add_argument("--overwrite", action="store_true",
-                        help="既にタグがあるゲームも上書きする")
+                        help="locked フラグを無視して全ゲームを再試行する")
     args = parser.parse_args()
     run(args.limit, args.overwrite)
