@@ -102,8 +102,12 @@ export const api = {
   searchComposers: (q: string) =>
     apiFetch<Composer[]>(`/search/composers?q=${encodeURIComponent(q)}`),
 
-  listGames: (tagId?: string, limit = 20) =>
-    apiFetch<Game[]>(`/games${tagId ? `?tag_id=${tagId}&limit=${limit}` : `?limit=${limit}`}`),
+  listGames: (tagId?: string, limit = 20, random = false) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (tagId) params.set("tag_id", tagId);
+    if (random) params.set("random", "true");
+    return apiFetch<Game[]>(`/games?${params}`);
+  },
 
   getGame: (id: string) =>
     apiFetch<GameDetail>(`/games/${id}`),
