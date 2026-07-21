@@ -50,7 +50,19 @@ export default function GameCard({ game, badge }: Props) {
         {game.title}
       </p>
       {game.release_year && (
-        <p className="mt-1 text-xs text-white/40">{game.release_year}</p>
+        <p className="mt-1 text-xs text-white/40">{game.release_year}年</p>
+      )}
+      {game.game_tags && game.game_tags.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {game.game_tags.slice(0, 3).map((gt) => (
+            <span
+              key={gt.mood_tags.id}
+              className="rounded-full bg-white/10 px-2 py-0.5 text-xs text-white/40"
+            >
+              {gt.mood_tags.name_ja ?? gt.mood_tags.name}
+            </span>
+          ))}
+        </div>
       )}
     </Link>
   );

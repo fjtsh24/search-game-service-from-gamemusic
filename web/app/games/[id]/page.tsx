@@ -1,12 +1,21 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { api } from "@/app/lib/api";
+import { headers } from "next/headers";
+import { api, GameDetail } from "@/app/lib/api";
 import GameCard from "@/app/components/GameCard";
 import YouTubePlayer from "@/app/components/YouTubePlayer";
 import StarRating from "@/app/components/StarRating";
 
+function pickDescription(game: GameDetail, acceptLang: string): string | null {
+  const lang = acceptLang.toLowerCase();
+  if (lang.startsWith("ja") && game.description_ja) return game.description_ja;
+  if (lang.startsWith("zh") && game.description_zh) return game.description_zh;
+  return game.description;
+}
+
 export default async function GamePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const acceptLang = (await headers()).get("accept-language") ?? "";
 
   const [game, similar] = await Promise.all([
     api.getGame(id).catch(() => null),
@@ -15,6 +24,7 @@ export default async function GamePage({ params }: { params: Promise<{ id: strin
 
   if (!game) notFound();
 
+  const description = pickDescription(game, acceptLang);
   const tags = game.game_tags?.map((gt) => gt.mood_tags).filter(Boolean) ?? [];
   const composers = game.tracks
     ?.flatMap((t) => t.track_composers?.map((tc) => tc.composers) ?? [])
@@ -24,23 +34,38 @@ export default async function GamePage({ params }: { params: Promise<{ id: strin
   return (
     <div className="space-y-10">
 
-      {/* 1. YouTubeプレーヤーを最上部に（主目的を最初に） */}
-      {game.tracks?.length > 0 && (
-        <YouTubePlayer tracks={game.tracks} gameTitle={game.title} />
-      )}
-
-      {/* 2. ゲームメタデータ */}
+      {/* ヘッダー: カバー画像 + ゲーム情報 */}
       <div className="flex flex-col gap-6 sm:flex-row sm:items-start">
+        {/* カバー画像 */}
+        {game.cover_image_url && (
+          <div className="w-full sm:w-72 shrink-0 overflow-hidden rounded-xl border border-white/10">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={game.cover_image_url}
+              alt={game.title}
+              className="w-full object-cover"
+            />
+          </div>
+        )}
+
         <div className="flex-1 space-y-4">
+          {/* タイトル・リリース年 */}
           <div>
             <h1 className="text-3xl font-bold leading-tight">{game.title}</h1>
-            {game.title_ja && <p className="mt-1 text-white/50">{game.title_ja}</p>}
+            {game.title_ja && (
+              <p className="mt-1 text-white/50">{game.title_ja}</p>
+            )}
             {game.release_year && (
               <p className="mt-1 text-sm text-white/40">{game.release_year}年</p>
             )}
           </div>
 
-          {/* タグ: # プレフィックスで「絞り込みフィルタ」であることを伝える */}
+          {/* 説明文 */}
+          {description && (
+            <p className="text-sm leading-relaxed text-white/60">{description}</p>
+          )}
+
+          {/* タグ */}
           {tags.length > 0 && (
             <div className="flex flex-wrap gap-2">
               {tags.map((tag) => (
@@ -55,10 +80,10 @@ export default async function GamePage({ params }: { params: Promise<{ id: strin
             </div>
           )}
 
-          {/* 作曲家: ラベルを明示して「探索の起点」であることを伝える */}
+          {/* 作曲家 */}
           {composers.length > 0 && (
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-              <span className="text-white/40 shrink-0">作曲家</span>
+              <span className="shrink-0 text-white/40">作曲家</span>
               {composers.map((c, i) => (
                 <span key={c.id} className="flex items-center gap-1">
                   <Link
@@ -92,7 +117,12 @@ export default async function GamePage({ params }: { params: Promise<{ id: strin
         </div>
       </div>
 
-      {/* 3. 類似ゲーム（件数をヘッダーで予告） */}
+      {/* YouTubeプレーヤー */}
+      {game.tracks?.length > 0 && (
+        <YouTubePlayer tracks={game.tracks} gameTitle={game.title} />
+      )}
+
+      {/* 音楽的に似たゲーム */}
       {similar.length > 0 && (
         <section>
           <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-white/40">

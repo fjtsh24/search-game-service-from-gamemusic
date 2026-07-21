@@ -8,7 +8,25 @@ VibeTag Jaccard係数によるゲーム類似度計算。
 """
 
 from collections import defaultdict
+
 from app.db import get_db
+
+_COMPOSER_BONUS = 0.2
+_MAX_COMPOSER_BONUS = 0.4
+
+
+def compute_similarity_score(
+    target_tags: set,
+    candidate_tags: set,
+    target_composers: set,
+    candidate_composers: set,
+) -> float:
+    """Jaccard係数 + 同一作曲家ボーナスで類似度スコアを計算する（純粋関数）。"""
+    union = target_tags | candidate_tags
+    jaccard = len(target_tags & candidate_tags) / len(union) if union else 0.0
+    shared_composers = target_composers & candidate_composers
+    bonus = min(len(shared_composers) * _COMPOSER_BONUS, _MAX_COMPOSER_BONUS)
+    return jaccard + bonus
 
 
 def _get_composers_for_games(db, game_ids: list[str]) -> dict[str, set[str]]:
@@ -109,20 +127,15 @@ async def similar_games_for(game_id: str, limit: int = 8) -> list[dict]:
     for row in (all_tags_result.data or []):
         game_all_tags[row["game_id"]].add(row["tag_id"])
 
-    COMPOSER_BONUS = 0.2  # 共有作曲家1人あたりのボーナス
-    MAX_COMPOSER_BONUS = 0.4
-
     scores: list[tuple[float, str]] = []
     for gid in game_shared:
-        shared_tags = game_shared[gid]
-        union = target_tags | game_all_tags[gid]
-        jaccard = len(shared_tags) / len(union) if union else 0.0
-
-        # 同一作曲家ボーナス
-        shared_composers = target_composers & composers_map.get(gid, set())
-        composer_bonus = min(len(shared_composers) * COMPOSER_BONUS, MAX_COMPOSER_BONUS)
-
-        scores.append((jaccard + composer_bonus, gid))
+        score = compute_similarity_score(
+            target_tags=target_tags,
+            candidate_tags=game_all_tags[gid],
+            target_composers=target_composers,
+            candidate_composers=composers_map.get(gid, set()),
+        )
+        scores.append((score, gid))
 
     scores.sort(reverse=True)
     top_ids = [gid for _, gid in scores[:limit]]
@@ -130,10 +143,10 @@ async def similar_games_for(game_id: str, limit: int = 8) -> list[dict]:
     if not top_ids:
         return []
 
-    # ゲーム詳細を取得してスコア順に返す
+    # ゲーム詳細を取得してスコア順に返す（タグも含めてカードに表示できるように）
     games_result = (
         db.table("games")
-        .select("id, title, title_ja, release_year, cover_image_url")
+        .select("id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja))")
         .in_("id", top_ids)
         .execute()
     )

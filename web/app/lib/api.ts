@@ -27,6 +27,7 @@ export type Game = {
   title_ja: string | null;
   release_year: number | null;
   cover_image_url: string | null;
+  game_tags?: { mood_tags: Tag }[];
 };
 
 export type Tag = {
@@ -45,6 +46,8 @@ export type Track = {
 
 export type GameDetail = Game & {
   description: string | null;
+  description_ja: string | null;
+  description_zh: string | null;
   steam_app_id: number | null;
   game_tags: { tag_id: string; mood_tags: Tag }[];
   tracks: Track[];

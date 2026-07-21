@@ -1,7 +1,9 @@
 import json
+
 from fastapi import APIRouter, Query
-from app.db import get_db
+
 from app import cache
+from app.db import get_db
 
 router = APIRouter()
 
@@ -35,7 +37,7 @@ async def search_games(q: str = Query(min_length=1)):
     db = get_db()
     result = (
         db.table("games")
-        .select("id, title, title_ja, release_year, cover_image_url")
+        .select("id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja))")
         .ilike("title", f"%{q}%")
         .limit(20)
         .execute()

@@ -1,7 +1,9 @@
 import json
+
 from fastapi import APIRouter, HTTPException
-from app.db import get_db
+
 from app import cache
+from app.db import get_db
 
 router = APIRouter()
 

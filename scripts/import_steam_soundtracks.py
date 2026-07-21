@@ -43,26 +43,19 @@ from dotenv import load_dotenv
 load_dotenv()
 
 try:
-    import musicbrainzngs
     from supabase import create_client
 except ImportError:
-    print("pip install requests python-dotenv supabase musicbrainzngs")
+    print("pip install requests python-dotenv supabase")
     raise SystemExit(1)
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 db = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-musicbrainzngs.set_useragent(
-    "GameMusicDiscovery", "0.1.0",
-    "https://github.com/fjtsh24/search-game-service-from-gamemusic",
-)
-
 STEAM_SEARCH_URL = "https://store.steampowered.com/search/results/"
 STEAM_REVIEWS_URL = "https://store.steampowered.com/appreviews/{appid}"
 STEAM_APP_DETAILS_URL = "https://store.steampowered.com/api/appdetails"
 STEAM_WAIT = 1.2
-MB_WAIT = 1.2
 PAGE_SIZE = 25
 MIN_REVIEW_COUNT = 10       # これ以下のレビュー数はスコアが不安定なためスキップ
 MAX_CANDIDATE_RATIO = 5     # limit * N 件を候補として最大探索
@@ -177,43 +170,83 @@ def steam_cover_url(game_appid: int) -> str:
     return f"https://cdn.akamai.steamstatic.com/steam/apps/{game_appid}/header.jpg"
 
 
-# ── MusicBrainz ───────────────────────────────────────────────────────────────
-
-def search_mb_releases(game_title: str) -> list[dict]:
-    """ゲームタイトルでサントラリリースを検索。タイトルが部分一致しない結果は除外。"""
-    time.sleep(MB_WAIT)
+def _fetch_appdetails(game_appid: int, lang: str) -> dict:
+    """指定言語で Steam appdetails を取得して data フィールドを返す。"""
+    time.sleep(STEAM_WAIT)
     try:
-        result = musicbrainzngs.search_releases(
-            query=f'"{game_title}" secondarytype:soundtrack',
-            limit=5,
+        resp = http.get(
+            STEAM_APP_DETAILS_URL,
+            params={"appids": game_appid, "filters": "basic,release_date", "l": lang},
+            timeout=10,
         )
-        title_lower = game_title.lower()
-        return [
-            r for r in result.get("release-list", [])
-            if title_lower in r.get("title", "").lower()
-            or r.get("title", "").lower() in title_lower
-        ]
+        resp.raise_for_status()
+        d = resp.json().get(str(game_appid), {})
+        return d.get("data", {}) if d.get("success") else {}
     except Exception:
-        return []
+        return {}
+
+
+def fetch_game_metadata(game_appid: int) -> tuple[str | None, str | None, str | None, int | None]:
+    """Steam appdetails から short_description (en/ja/zh) と release_year を取得。
+
+    Returns:
+        (description_en, description_ja, description_zh, release_year)
+    """
+    en_data = _fetch_appdetails(game_appid, "english")
+    ja_data = _fetch_appdetails(game_appid, "japanese")
+    zh_data = _fetch_appdetails(game_appid, "schinese")
+
+    description_en = en_data.get("short_description") or None
+    description_ja = ja_data.get("short_description") or None
+    description_zh = zh_data.get("short_description") or None
+
+    # 英語と同一テキストなら格納しない（翻訳なし扱い）
+    if description_ja == description_en:
+        description_ja = None
+    if description_zh == description_en:
+        description_zh = None
+
+    release_year = None
+    release_date = en_data.get("release_date", {})
+    if not release_date.get("coming_soon") and release_date.get("date"):
+        try:
+            year = int(release_date["date"].strip()[-4:])
+            if 1980 <= year <= 2030:
+                release_year = year
+        except (ValueError, IndexError):
+            pass
+
+    return description_en, description_ja, description_zh, release_year
 
 
 # ── DB 操作 ───────────────────────────────────────────────────────────────────
 
-def upsert_game(title: str, steam_app_id: int, cover_image_url: str, mb_release_id: str | None) -> str | None:
+def upsert_game(
+    title: str,
+    steam_app_id: int,
+    cover_image_url: str,
+    description: str | None = None,
+    description_ja: str | None = None,
+    description_zh: str | None = None,
+    release_year: int | None = None,
+) -> str | None:
     """ゲームを upsert して game_id を返す。"""
+    payload: dict = {"title": title, "cover_image_url": cover_image_url}
+    if description:
+        payload["description"] = description
+    if description_ja:
+        payload["description_ja"] = description_ja
+    if description_zh:
+        payload["description_zh"] = description_zh
+    if release_year:
+        payload["release_year"] = release_year
+
     existing = db.table("games").select("id").eq("steam_app_id", steam_app_id).execute().data
     if existing:
-        db.table("games").update({
-            "title": title,
-            "cover_image_url": cover_image_url,
-            **({"musicbrainz_release_id": mb_release_id} if mb_release_id else {}),
-        }).eq("steam_app_id", steam_app_id).execute()
+        db.table("games").update(payload).eq("steam_app_id", steam_app_id).execute()
         return existing[0]["id"]
 
-    payload: dict = {"title": title, "steam_app_id": steam_app_id, "cover_image_url": cover_image_url}
-    if mb_release_id:
-        payload["musicbrainz_release_id"] = mb_release_id
-    result = db.table("games").insert(payload).execute()
+    result = db.table("games").insert({**payload, "steam_app_id": steam_app_id}).execute()
     return result.data[0]["id"] if result.data else None
 
 
@@ -229,24 +262,6 @@ def get_or_create_track(game_id: str, title: str) -> str | None:
     }).execute()
     return result.data[0]["id"] if result.data else None
 
-
-def upsert_composer(artist: dict) -> str | None:
-    mbid = artist.get("id")
-    name = artist.get("name") or artist.get("sort-name")
-    if not mbid or not name:
-        return None
-    result = db.table("composers").upsert(
-        {"musicbrainz_id": mbid, "name": name},
-        on_conflict="musicbrainz_id",
-    ).execute()
-    return result.data[0]["id"] if result.data else None
-
-
-def link_composer_to_track(composer_id: str, track_id: str) -> None:
-    db.table("track_composers").upsert(
-        {"track_id": track_id, "composer_id": composer_id, "is_primary": True},
-        on_conflict="track_id,composer_id",
-    ).execute()
 
 
 # ── メインループ ───────────────────────────────────────────────────────────────
@@ -297,7 +312,6 @@ def run(limit: int, min_score: int) -> None:
 
     # ── フェーズ 2: DB 登録 ───────────────────────────────────────────────────
     imported = 0
-    composers_linked = 0
 
     for i, item in enumerate(targets, 1):
         soundtrack_appid = item["appid"]
@@ -312,45 +326,27 @@ def run(limit: int, min_score: int) -> None:
         elif _title_looks_like_standalone_ost(title):
             print(f"  ⚠ 単独OST検出 / fullgame 未解決 → appid={game_appid} をそのまま使用")
 
-        # MusicBrainz で作曲家検索
-        mb_releases = search_mb_releases(title)
-        mb_release_id: str | None = None
-        composer_ids: list[str] = []
-
-        if mb_releases:
-            release = mb_releases[0]
-            mb_release_id = release.get("id")
-            for credit in release.get("artist-credit", []):
-                if not isinstance(credit, dict):
-                    continue
-                artist = credit.get("artist")
-                if artist:
-                    cid = upsert_composer(artist)
-                    if cid:
-                        composer_ids.append(cid)
-            print(f"  MusicBrainz: 作曲家 {len(composer_ids)} 件")
-        else:
-            print("  MusicBrainz: 該当なし")
+        # ゲーム本体のメタデータ取得（説明文 en/ja/zh・リリース年）
+        description, description_ja, description_zh, release_year = fetch_game_metadata(game_appid)
+        if description:
+            print(f"  説明文(en): {description[:60]}…")
+        if description_ja:
+            print(f"  説明文(ja): {description_ja[:60]}…")
+        if description_zh:
+            print(f"  説明文(zh): {description_zh[:60]}…")
+        if release_year:
+            print(f"  リリース年: {release_year}")
 
         # ゲーム登録（game_appid = ゲーム本体のappid、カバー画像もゲーム本体を使う）
-        game_id = upsert_game(title, game_appid, steam_cover_url(game_appid), mb_release_id)
+        game_id = upsert_game(title, game_appid, steam_cover_url(game_appid), description, description_ja, description_zh, release_year)
         if not game_id:
             print("  DB 登録失敗、スキップ")
             continue
 
-        # 代表トラック作成 → 作曲家を紐付け
-        if composer_ids:
-            track_id = get_or_create_track(game_id, title)
-            if track_id:
-                for cid in composer_ids:
-                    link_composer_to_track(cid, track_id)
-                composers_linked += len(composer_ids)
-                print(f"  track_composers: {len(composer_ids)} 件紐付け")
-
         imported += 1
         print()
 
-    print(f"完了 — ゲーム: {imported} 件, 作曲家紐付け: {composers_linked} 件")
+    print(f"完了 — ゲーム: {imported} 件")
 
 
 if __name__ == "__main__":

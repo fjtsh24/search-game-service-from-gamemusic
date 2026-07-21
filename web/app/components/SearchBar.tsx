@@ -23,13 +23,8 @@ export default function SearchBar() {
   }, []);
 
   useEffect(() => {
-    if (query.length < 2) {
-      setGames([]);
-      setComposers([]);
-      setOpen(false);
-      setSearched(false);
-      return;
-    }
+    if (query.length < 2) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSearched(false);
     const timer = setTimeout(async () => {
       setLoading(true);
@@ -60,7 +55,16 @@ export default function SearchBar() {
         <input
           type="search"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            const val = e.target.value;
+            setQuery(val);
+            if (val.length < 2) {
+              setGames([]);
+              setComposers([]);
+              setOpen(false);
+              setSearched(false);
+            }
+          }}
           placeholder="ゲーム名・作曲家名で検索..."
           className="w-full rounded-full border border-white/20 bg-white/10 px-5 py-3 text-sm text-white placeholder-white/50 backdrop-blur focus:border-white/40 focus:outline-none"
         />

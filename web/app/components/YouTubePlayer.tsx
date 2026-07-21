@@ -74,14 +74,24 @@ export default function YouTubePlayer({ tracks, gameTitle }: Props) {
                 ))}
               </p>
             )}
-            <a
-              href={`https://www.youtube.com/watch?v=${active.youtube_video_id}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-block text-xs text-white/30 hover:text-white/60"
-            >
-              YouTube で開く ↗
-            </a>
+            <div className="flex items-center gap-3">
+              <a
+                href={`https://www.youtube.com/watch?v=${active.youtube_video_id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-block text-xs text-white/30 hover:text-white/60"
+              >
+                YouTube で開く ↗
+              </a>
+              <a
+                href={`https://github.com/fjtsh24/search-game-service-from-gamemusic/issues/new?title=動画が違う: ${encodeURIComponent(gameTitle)}&body=${encodeURIComponent(`ゲーム: ${gameTitle}\n動画ID: ${active.youtube_video_id}\n\n正しい動画のURLや動画名を教えてください。`)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-block text-xs text-white/20 hover:text-white/50"
+              >
+                動画が違う場合 ↗
+              </a>
+            </div>
           </div>
         </div>
 
