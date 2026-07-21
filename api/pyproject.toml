@@ -1,0 +1,19 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["app/__init__.py", "app/routers/__init__.py", "app/services/__init__.py"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 50
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+ignore = ["E501"]  # Supabase select文など必然的に長くなる行のため除外
