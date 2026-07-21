@@ -62,7 +62,7 @@ export type Composer = {
 };
 
 async function apiFetch<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, { next: { revalidate: 300 } });
+  const res = await fetch(`${API_URL}${path}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`API error: ${res.status} ${path}`);
   return res.json();
 }
