@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Track, authApi } from "@/app/lib/api";
 
@@ -8,14 +8,18 @@ type Props = {
   tracks: Track[];
   gameTitle: string;
   gameId: string;
-  isLoggedIn: boolean;
 };
 
-export default function YouTubePlayer({ tracks, gameTitle, gameId, isLoggedIn }: Props) {
+export default function YouTubePlayer({ tracks, gameTitle, gameId }: Props) {
   const playable = tracks.filter((t) => t.youtube_video_id);
   const [activeIndex, setActiveIndex] = useState(0);
   const [flagged, setFlagged] = useState(false);
   const [flagging, setFlagging] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+
+  useEffect(() => {
+    authApi.getMe().then(() => setIsLoggedIn(true)).catch(() => {});
+  }, []);
 
   if (playable.length === 0) {
     return (
