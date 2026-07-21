@@ -25,28 +25,55 @@ async def list_games(
             return json.loads(cached)
 
     db = get_db()
-    if tag_id:
-        result = (
-            db.table("game_tags")
-            .select("game_id, games(id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja)))")
-            .eq("tag_id", tag_id)
-            .limit(limit * 5 if random else limit)
-            .execute()
-        )
-        data = [row["games"] for row in result.data]
-    else:
-        result = (
-            db.table("games")
-            .select("id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja))")
-            .limit(limit * 5 if random else limit)
-            .execute()
-        )
-        data = result.data
-
     if random:
+        # 全件数を取得してランダムoffsetで limit 件だけ取得
+        if tag_id:
+            count_result = (
+                db.table("game_tags")
+                .select("game_id", count="exact")
+                .eq("tag_id", tag_id)
+                .execute()
+            )
+            total = count_result.count or 0
+            offset = _random.randint(0, max(0, total - limit))
+            result = (
+                db.table("game_tags")
+                .select("game_id, games(id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja)))")
+                .eq("tag_id", tag_id)
+                .range(offset, offset + limit - 1)
+                .execute()
+            )
+            data = [row["games"] for row in result.data]
+        else:
+            count_result = db.table("games").select("id", count="exact").execute()
+            total = count_result.count or 0
+            offset = _random.randint(0, max(0, total - limit))
+            result = (
+                db.table("games")
+                .select("id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja))")
+                .range(offset, offset + limit - 1)
+                .execute()
+            )
+            data = result.data
         _random.shuffle(data)
-        data = data[:limit]
     else:
+        if tag_id:
+            result = (
+                db.table("game_tags")
+                .select("game_id, games(id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja)))")
+                .eq("tag_id", tag_id)
+                .limit(limit)
+                .execute()
+            )
+            data = [row["games"] for row in result.data]
+        else:
+            result = (
+                db.table("games")
+                .select("id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja))")
+                .limit(limit)
+                .execute()
+            )
+            data = result.data
         await cache.set(cache_key, data, ex=600)
     return data
 
