@@ -65,6 +65,30 @@ jobs:
       - name: Step 4 — Steam 新規ゲーム追加（10件）
         run: python3 scripts/import_steam_soundtracks.py --limit 10
 
+      - name: Step 5 — 動画報告済みトラックの確認（要管理者レビュー）
+        run: |
+          python3 - <<'EOF'
+          import os
+          from supabase import create_client
+          db = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_ROLE_KEY"])
+          rows = (
+              db.table("tracks")
+              .select("id, youtube_video_id, games(title)")
+              .eq("youtube_flagged", True)
+              .execute()
+              .data or []
+          )
+          if not rows:
+              print("報告済み動画: なし")
+          else:
+              print(f"⚠ 報告済み動画 {len(rows)} 件（管理者確認・手動対応が必要）:")
+              for r in rows:
+                  title = (r.get("games") or {}).get("title", "?")
+                  vid = r.get("youtube_video_id", "?")
+                  print(f"  - {title}: https://www.youtube.com/watch?v={vid}")
+              print("\n対応後は tracks.youtube_flagged = FALSE に更新してください。")
+          EOF
+
   # ── 手動トリガー: 個別ジョブ ──────────────────────────────────────────────
   youtube:
     name: YouTube 動画 ID 補充（既存補完 + 新規作成）

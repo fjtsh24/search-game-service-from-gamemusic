@@ -188,13 +188,22 @@ def _fetch_appdetails(game_appid: int, lang: str) -> dict:
         return {}
 
 
-def fetch_game_metadata(game_appid: int) -> tuple[str | None, str | None, str | None, int | None]:
-    """Steam appdetails から short_description (en/ja/zh) と release_year を取得。
+_ALLOWED_APP_TYPES = {"game", ""}   # "game" または type 不明のものは通す
+
+def fetch_game_metadata(game_appid: int) -> tuple[str | None, str | None, str | None, int | None, str | None]:
+    """Steam appdetails から short_description (en/ja/zh)・release_year・type を取得。
 
     Returns:
-        (description_en, description_ja, description_zh, release_year)
+        (description_en, description_ja, description_zh, release_year, app_type)
+        app_type が "dlc" / "demo" / "advertising" 等の場合は登録をスキップすること。
     """
     en_data = _fetch_appdetails(game_appid, "english")
+
+    app_type = en_data.get("type", "")
+    if app_type not in _ALLOWED_APP_TYPES:
+        # DLC・デモ等はここで早期リターン（ja/zh の API 呼び出しを省略）
+        return None, None, None, None, app_type
+
     ja_data = _fetch_appdetails(game_appid, "japanese")
     zh_data = _fetch_appdetails(game_appid, "schinese")
 
@@ -218,7 +227,7 @@ def fetch_game_metadata(game_appid: int) -> tuple[str | None, str | None, str | 
         except (ValueError, IndexError):
             pass
 
-    return description_en, description_ja, description_zh, release_year
+    return description_en, description_ja, description_zh, release_year, app_type
 
 
 # ── DB 操作 ───────────────────────────────────────────────────────────────────
@@ -328,8 +337,11 @@ def run(limit: int, min_score: int) -> None:
         elif _title_looks_like_standalone_ost(title):
             print(f"  ⚠ 単独OST検出 / fullgame 未解決 → appid={game_appid} をそのまま使用")
 
-        # ゲーム本体のメタデータ取得（説明文 en/ja/zh・リリース年）
-        description, description_ja, description_zh, release_year = fetch_game_metadata(game_appid)
+        # ゲーム本体のメタデータ取得（説明文 en/ja/zh・リリース年・アプリ種別）
+        description, description_ja, description_zh, release_year, app_type = fetch_game_metadata(game_appid)
+        if app_type not in _ALLOWED_APP_TYPES:
+            print(f"  skip: type={app_type!r} — ゲーム本体ではないため除外")
+            continue
         if description:
             print(f"  説明文(en): {description[:60]}…")
         if description_ja:
@@ -381,7 +393,10 @@ def run_backfill(limit: int) -> None:
         steam_app_id = game["steam_app_id"]
         print(f"[{i}/{len(rows)}] {title} (appid={steam_app_id})")
 
-        desc_en, desc_ja, desc_zh, release_year = fetch_game_metadata(steam_app_id)
+        desc_en, desc_ja, desc_zh, release_year, app_type = fetch_game_metadata(steam_app_id)
+        if app_type not in _ALLOWED_APP_TYPES:
+            print(f"  skip: type={app_type!r} — ゲーム本体ではないため除外")
+            continue
 
         payload: dict = {}
         if game.get("description") is None and desc_en:

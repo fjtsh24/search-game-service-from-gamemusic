@@ -17,9 +17,10 @@ export default async function GamePage({ params }: { params: Promise<{ id: strin
   const { id } = await params;
   const acceptLang = (await headers()).get("accept-language") ?? "";
 
-  const [game, similar] = await Promise.all([
+  const [game, similar, me] = await Promise.all([
     api.getGame(id).catch(() => null),
     api.getSimilarGames(id).catch(() => []),
+    api.getMe().catch(() => null),
   ]);
 
   if (!game) notFound();
@@ -119,7 +120,7 @@ export default async function GamePage({ params }: { params: Promise<{ id: strin
 
       {/* YouTubeプレーヤー */}
       {game.tracks?.length > 0 && (
-        <YouTubePlayer tracks={game.tracks} gameTitle={game.title} />
+        <YouTubePlayer tracks={game.tracks} gameTitle={game.title} gameId={id} isLoggedIn={!!me} />
       )}
 
       {/* 音楽的に似たゲーム */}

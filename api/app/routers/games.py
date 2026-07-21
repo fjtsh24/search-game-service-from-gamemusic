@@ -1,10 +1,11 @@
 import json
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app import cache
 from app.db import get_db
 from app.services.similarity import similar_games_for
+from app.session import require_session
 
 router = APIRouter()
 
@@ -75,6 +76,24 @@ async def get_game(game_id: str):
 
     await cache.set(cache_key, result.data, ex=3600)
     return result.data
+
+
+@router.post("/{game_id}/flag-video")
+async def flag_video(game_id: str, session: dict = Depends(require_session)):
+    """再生中の YouTube 動画が違うとユーザーが報告する。
+    VideoID は即座には削除せず、tracks.youtube_flagged = TRUE をセットして管理者確認待ちにする。
+    """
+    db = get_db()
+    result = db.table("tracks").select("id").eq("game_id", game_id).execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    track_ids = [r["id"] for r in result.data]
+    for tid in track_ids:
+        db.table("tracks").update({"youtube_flagged": True}).eq("id", tid).execute()
+
+    await cache.delete(f"games:detail:{game_id}")
+    return {"flagged": True}
 
 
 @router.get("/{game_id}/similar")

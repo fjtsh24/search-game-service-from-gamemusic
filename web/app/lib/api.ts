@@ -115,6 +115,9 @@ export const api = {
   getSimilarGames: (id: string) =>
     apiFetch<Game[]>(`/games/${id}/similar`),
 
+  flagVideo: (gameId: string) =>
+    apiFetch<{ flagged: boolean }>(`/games/${gameId}/flag-video`, { method: "POST" }),
+
   getComposer: (id: string) =>
     apiFetch<Composer>(`/composers/${id}`),
 
