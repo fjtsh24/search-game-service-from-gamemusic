@@ -1,13 +1,16 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { api } from "@/app/lib/api";
+import { api, authApi } from "@/app/lib/api";
 import GameCard from "@/app/components/GameCard";
 import YouTubePlayer from "@/app/components/YouTubePlayer";
 
 export default async function ComposerPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
 
-  const composer = await api.getComposer(id).catch(() => null);
+  const [composer, me] = await Promise.all([
+    api.getComposer(id).catch(() => null),
+    authApi.getMe().catch(() => null),
+  ]);
   if (!composer) notFound();
 
   // 代表作（先頭ゲーム）のトラック情報を取得してプレーヤーに使う
@@ -42,7 +45,7 @@ export default async function ComposerPage({ params }: { params: Promise<{ id: s
               {featuredGame.title} →
             </Link>
           </div>
-          <YouTubePlayer tracks={featuredTracks} gameTitle={featuredGame.title} />
+          <YouTubePlayer tracks={featuredTracks} gameTitle={featuredGame.title} gameId={featuredGame.id} isLoggedIn={!!me} />
         </section>
       )}
 

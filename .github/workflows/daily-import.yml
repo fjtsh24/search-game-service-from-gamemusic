@@ -2,8 +2,8 @@ name: Daily Data Import
 
 on:
   schedule:
-    # 毎日 JST 10:00（UTC 01:00）に実行（youtube ジョブのみ）
-    - cron: '0 1 * * *'
+    # 毎日 JST 04:00（UTC 19:00）に自動実行
+    - cron: '0 19 * * *'
   workflow_dispatch:
     inputs:
       job:
@@ -13,6 +13,7 @@ on:
         type: choice
         options:
           - youtube
+          - steam_backfill
           - steam
           - game_tags
           - lastfm_similarities
@@ -35,10 +36,63 @@ env:
   UPSTASH_REDIS_TOKEN: ${{ secrets.UPSTASH_REDIS_TOKEN }}
 
 jobs:
+  # ── 毎日自動実行: 優先度順の拡充パイプライン ──────────────────────────────
+  daily-enrichment:
+    name: 毎日データ拡充（タグ→説明文補完→YouTube→新規追加）
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: scripts/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Step 1 — ゲームタグ付与（40件、locked スキップ）
+        run: python3 scripts/import_game_tags.py --limit 40
+
+      - name: Step 2 — Steam 説明文バックフィル（30件）
+        run: python3 scripts/import_steam_soundtracks.py --backfill --limit 30
+
+      - name: Step 3 — YouTube VideoID 既存補完（20件、locked スキップ）
+        run: python3 scripts/import_youtube_video_ids.py --limit 20 --phase 1
+
+      - name: Step 4 — Steam 新規ゲーム追加（10件）
+        run: python3 scripts/import_steam_soundtracks.py --limit 10
+
+      - name: Step 5 — 動画報告済みトラックの確認（要管理者レビュー）
+        run: |
+          python3 - <<'EOF'
+          import os
+          from supabase import create_client
+          db = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_ROLE_KEY"])
+          rows = (
+              db.table("tracks")
+              .select("id, youtube_video_id, games(title)")
+              .eq("youtube_flagged", True)
+              .execute()
+              .data or []
+          )
+          if not rows:
+              print("報告済み動画: なし")
+          else:
+              print(f"⚠ 報告済み動画 {len(rows)} 件（管理者確認・手動対応が必要）:")
+              for r in rows:
+                  title = (r.get("games") or {}).get("title", "?")
+                  vid = r.get("youtube_video_id", "?")
+                  print(f"  - {title}: https://www.youtube.com/watch?v={vid}")
+              print("\n対応後は tracks.youtube_flagged = FALSE に更新してください。")
+          EOF
+
+  # ── 手動トリガー: 個別ジョブ ──────────────────────────────────────────────
   youtube:
     name: YouTube 動画 ID 補充（既存補完 + 新規作成）
-    # schedule 時 または手動で youtube を選択した場合に実行
-    if: github.event_name == 'schedule' || inputs.job == 'youtube'
+    if: github.event_name == 'workflow_dispatch' && inputs.job == 'youtube'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -59,9 +113,30 @@ jobs:
           echo "処理件数: ${LIMIT} / フェーズ: ${PHASE}"
           python3 scripts/import_youtube_video_ids.py --limit "${LIMIT}" --phase "${PHASE}"
 
+  steam_backfill:
+    name: Steam 説明文バックフィル（既存ゲームの欠損説明文を補完）
+    if: github.event_name == 'workflow_dispatch' && inputs.job == 'steam_backfill'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: scripts/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Run Steam backfill
+        run: |
+          LIMIT=${{ inputs.limit || '100' }}
+          python3 scripts/import_steam_soundtracks.py --backfill --limit "${LIMIT}"
+
   steam:
     name: Steam サントラ追加登録
-    if: inputs.job == 'steam'
+    if: github.event_name == 'workflow_dispatch' && inputs.job == 'steam'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -82,7 +157,7 @@ jobs:
 
   game_tags:
     name: Last.fm ゲームタグ付与
-    if: inputs.job == 'game_tags'
+    if: github.event_name == 'workflow_dispatch' && inputs.job == 'game_tags'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -103,7 +178,7 @@ jobs:
 
   lastfm_similarities:
     name: Last.fm 作曲家間類似度更新
-    if: inputs.job == 'lastfm_similarities'
+    if: github.event_name == 'workflow_dispatch' && inputs.job == 'lastfm_similarities'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

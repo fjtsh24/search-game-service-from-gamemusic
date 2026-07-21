@@ -4,7 +4,7 @@ import FeedSection from "@/app/components/FeedSection";
 
 export default async function Home() {
   const [games, tags] = await Promise.all([
-    api.listGames(undefined, 20).catch(() => []),
+    api.listGames(undefined, 20, true).catch(() => []),
     api.listTags().catch(() => []),
   ]);
 

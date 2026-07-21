@@ -2,16 +2,20 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Track } from "@/app/lib/api";
+import { Track, authApi } from "@/app/lib/api";
 
 type Props = {
   tracks: Track[];
   gameTitle: string;
+  gameId: string;
+  isLoggedIn: boolean;
 };
 
-export default function YouTubePlayer({ tracks, gameTitle }: Props) {
+export default function YouTubePlayer({ tracks, gameTitle, gameId, isLoggedIn }: Props) {
   const playable = tracks.filter((t) => t.youtube_video_id);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [flagged, setFlagged] = useState(false);
+  const [flagging, setFlagging] = useState(false);
 
   if (playable.length === 0) {
     return (
@@ -83,14 +87,30 @@ export default function YouTubePlayer({ tracks, gameTitle }: Props) {
               >
                 YouTube で開く ↗
               </a>
-              <a
-                href={`https://github.com/fjtsh24/search-game-service-from-gamemusic/issues/new?title=動画が違う: ${encodeURIComponent(gameTitle)}&body=${encodeURIComponent(`ゲーム: ${gameTitle}\n動画ID: ${active.youtube_video_id}\n\n正しい動画のURLや動画名を教えてください。`)}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-block text-xs text-white/20 hover:text-white/50"
-              >
-                動画が違う場合 ↗
-              </a>
+              {isLoggedIn && (
+                flagged ? (
+                  <span className="text-xs text-white/30">報告済み</span>
+                ) : (
+                  <button
+                    disabled={flagging}
+                    onClick={async () => {
+                      if (!confirm("この動画が違うと報告しますか？")) return;
+                      setFlagging(true);
+                      try {
+                        await authApi.flagVideo(gameId);
+                        setFlagged(true);
+                      } catch {
+                        // ignore
+                      } finally {
+                        setFlagging(false);
+                      }
+                    }}
+                    className="text-xs text-white/20 hover:text-white/50 disabled:opacity-50"
+                  >
+                    {flagging ? "報告中..." : "動画が違う場合"}
+                  </button>
+                )
+              )}
             </div>
           </div>
         </div>
