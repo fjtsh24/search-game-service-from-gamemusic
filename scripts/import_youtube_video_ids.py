@@ -44,10 +44,26 @@ YOUTUBE_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 WAIT = 0.1  # YouTube API クォータ節約（単純な sleep で十分）
 
 
-def search_youtube(query: str) -> str | None:
-    """YouTube で検索して上位 1 件の videoId を返す"""
+def _title_matches(game_title: str, video_title: str) -> bool:
+    """ゲームタイトルのキーワードが動画タイトルに含まれるか検証する。
+    ASCII文字のみで判定し、非ASCII（日中韓など）タイトルはスキップ（常にTrue）。
+    """
+    import re
+    ascii_words = re.findall(r"[a-zA-Z0-9]{4,}", game_title)
+    if not ascii_words:
+        return True  # 非ASCII タイトルは検証スキップ
+    video_lower = video_title.lower()
+    matched = sum(1 for w in ascii_words if w.lower() in video_lower)
+    # 半数以上のキーワードが含まれていればOK
+    return matched >= max(1, len(ascii_words) // 2)
+
+
+def search_youtube(query: str, game_title: str = "") -> str | None:
+    """YouTube で検索して上位 1 件の videoId を返す。
+    game_title が指定された場合、動画タイトルとのキーワードマッチを検証する。
+    """
     resp = requests.get(YOUTUBE_SEARCH_URL, params={
-        "part": "id",
+        "part": "id,snippet",
         "q": query,
         "type": "video",
         "maxResults": 1,
@@ -61,7 +77,19 @@ def search_youtube(query: str) -> str | None:
     items = resp.json().get("items", [])
     if not items:
         return None
-    return items[0]["id"].get("videoId")
+
+    item = items[0]
+    video_id = item["id"].get("videoId")
+    if not video_id:
+        return None
+
+    if game_title:
+        video_title = item.get("snippet", {}).get("title", "")
+        if not _title_matches(game_title, video_title):
+            print(f"  SKIP（タイトル不一致）: 動画='{video_title}'")
+            return None
+
+    return video_id
 
 
 # ── Phase 1: 既存トラックへの VideoID 補完 ────────────────────────────────────
@@ -92,7 +120,7 @@ def fill_existing_tracks(limit: int) -> int:
     for track in tracks:
         game_title = (track.get("games") or {}).get("title") or track.get("title", "")
         query = f"{game_title} soundtrack"
-        video_id = search_youtube(query)
+        video_id = search_youtube(query, game_title=game_title)
 
         if video_id:
             db.table("tracks").update({"youtube_video_id": video_id}).eq("id", track["id"]).execute()
@@ -139,7 +167,7 @@ def create_tracks_for_new_games(limit: int) -> int:
     for game in games:
         title = game["title"]
         query = f"{title} soundtrack"
-        video_id = search_youtube(query)
+        video_id = search_youtube(query, game_title=title)
 
         if video_id:
             db.table("tracks").insert({

@@ -9,8 +9,10 @@ Upstash Redis REST API を使ったシンプルなキャッシュラッパー。
 """
 
 import json
-import httpx
 from urllib.parse import quote
+
+import httpx
+
 from app.config import settings
 
 _client: httpx.AsyncClient | None = None

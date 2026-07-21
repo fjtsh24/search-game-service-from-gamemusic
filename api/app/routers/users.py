@@ -1,13 +1,14 @@
 import json
+
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-import httpx
 
+from app import cache
 from app.config import settings
 from app.db import get_db
-from app.session import require_session
-from app import cache
 from app.services.similarity import composer_boost_for_games
+from app.session import require_session
 
 router = APIRouter()
 
@@ -32,7 +33,7 @@ async def get_library(session: dict = Depends(require_session)):
     db = get_db()
     rows = (
         db.table("user_games")
-        .select("*, games(id, title, title_ja, cover_image_url, steam_app_id)")
+        .select("*, games(id, title, title_ja, release_year, cover_image_url, steam_app_id, game_tags(mood_tags(id, name, name_ja)))")
         .eq("user_id", session["user_id"])
         .order("added_at", desc=True)
         .execute()
@@ -191,7 +192,7 @@ async def get_feed(limit: int = Query(default=20, le=100), session: dict = Depen
 
     games = (
         db.table("games")
-        .select("id, title, title_ja, release_year, cover_image_url")
+        .select("id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja))")
         .in_("id", top_ids)
         .execute()
     )
