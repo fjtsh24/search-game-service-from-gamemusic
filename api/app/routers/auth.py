@@ -92,14 +92,17 @@ async def steam_callback(request: Request):
 
     session_id = await create_session(user_id, steam_id)
 
+    is_prod = settings.environment == "production"
     response = RedirectResponse(url=f"{settings.frontend_url}/library", status_code=302)
     response.set_cookie(
         key=COOKIE_NAME,
         value=session_id,
         max_age=30 * 24 * 3600,
         httponly=True,
-        samesite="lax",
-        secure=settings.environment == "production",
+        # 本番はフロントとAPIが別ドメイン（vercel.app / fly.dev）なので
+        # クロスサイト fetch で Cookie を送るには samesite=none + secure が必要
+        samesite="none" if is_prod else "lax",
+        secure=is_prod,
     )
     return response
 
