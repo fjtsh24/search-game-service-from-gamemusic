@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Track, api } from "@/app/lib/api";
+import { Track, authApi } from "@/app/lib/api";
 
 type Props = {
   tracks: Track[];
@@ -97,7 +97,7 @@ export default function YouTubePlayer({ tracks, gameTitle, gameId, isLoggedIn }:
                       if (!confirm("この動画が違うと報告しますか？")) return;
                       setFlagging(true);
                       try {
-                        await api.flagVideo(gameId);
+                        await authApi.flagVideo(gameId);
                         setFlagged(true);
                       } catch {
                         // ignore

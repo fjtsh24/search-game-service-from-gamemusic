@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { headers } from "next/headers";
-import { api, GameDetail } from "@/app/lib/api";
+import { api, authApi, GameDetail } from "@/app/lib/api";
 import GameCard from "@/app/components/GameCard";
 import YouTubePlayer from "@/app/components/YouTubePlayer";
 import StarRating from "@/app/components/StarRating";
@@ -20,7 +20,7 @@ export default async function GamePage({ params }: { params: Promise<{ id: strin
   const [game, similar, me] = await Promise.all([
     api.getGame(id).catch(() => null),
     api.getSimilarGames(id).catch(() => []),
-    api.getMe().catch(() => null),
+    authApi.getMe().catch(() => null),
   ]);
 
   if (!game) notFound();
