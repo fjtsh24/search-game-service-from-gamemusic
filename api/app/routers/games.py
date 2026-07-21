@@ -1,4 +1,5 @@
 import json
+import random as _random
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -25,28 +26,27 @@ async def list_games(
 
     db = get_db()
     if tag_id:
-        q = (
+        result = (
             db.table("game_tags")
             .select("game_id, games(id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja)))")
             .eq("tag_id", tag_id)
-            .limit(limit)
+            .limit(limit * 5 if random else limit)
+            .execute()
         )
-        if random:
-            q = q.order("random()")
-        result = q.execute()
         data = [row["games"] for row in result.data]
     else:
-        q = (
+        result = (
             db.table("games")
             .select("id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja))")
-            .limit(limit)
+            .limit(limit * 5 if random else limit)
+            .execute()
         )
-        if random:
-            q = q.order("random()")
-        result = q.execute()
         data = result.data
 
-    if not random:
+    if random:
+        _random.shuffle(data)
+        data = data[:limit]
+    else:
         await cache.set(cache_key, data, ex=600)
     return data
 
