@@ -1,14 +1,16 @@
 import json
+
 from fastapi import APIRouter, HTTPException, Query
+
+from app import cache
 from app.db import get_db
 from app.services.similarity import similar_games_for
-from app import cache
 
 router = APIRouter()
 
 
 @router.get("")
-async def list_games(tag_id: str | None = Query(default=None), limit: int = 20):
+async def list_games(tag_id: str | None = Query(default=None), limit: int = Query(default=20, le=100)):
     cache_key = f"games:list:{tag_id or 'all'}:{limit}"
     cached = await cache.get(cache_key)
     if cached:
@@ -18,7 +20,7 @@ async def list_games(tag_id: str | None = Query(default=None), limit: int = 20):
     if tag_id:
         result = (
             db.table("game_tags")
-            .select("game_id, games(id, title, title_ja, release_year, cover_image_url)")
+            .select("game_id, games(id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja)))")
             .eq("tag_id", tag_id)
             .limit(limit)
             .execute()
@@ -27,7 +29,7 @@ async def list_games(tag_id: str | None = Query(default=None), limit: int = 20):
     else:
         result = (
             db.table("games")
-            .select("id, title, title_ja, release_year, cover_image_url")
+            .select("id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja))")
             .limit(limit)
             .execute()
         )
@@ -48,7 +50,7 @@ async def get_game(game_id: str):
     result = (
         db.table("games")
         .select(
-            "id, title, title_ja, description, release_year, cover_image_url, steam_app_id,"
+            "id, title, title_ja, description, description_ja, description_zh, release_year, cover_image_url, steam_app_id,"
             "game_tags(tag_id, mood_tags(id, name, name_ja)),"
             "tracks(id, title, track_number, youtube_video_id,"
             "  track_composers(is_primary, composers(id, name)))"
@@ -65,7 +67,7 @@ async def get_game(game_id: str):
 
 
 @router.get("/{game_id}/similar")
-async def get_similar_games(game_id: str, limit: int = 8):
+async def get_similar_games(game_id: str, limit: int = Query(default=8, le=50)):
     cache_key = f"games:similar:{game_id}:{limit}"
     cached = await cache.get(cache_key)
     if cached:

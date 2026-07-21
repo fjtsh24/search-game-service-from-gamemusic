@@ -27,6 +27,7 @@ export type Game = {
   title_ja: string | null;
   release_year: number | null;
   cover_image_url: string | null;
+  game_tags?: { mood_tags: Tag }[];
 };
 
 export type Tag = {
@@ -45,6 +46,8 @@ export type Track = {
 
 export type GameDetail = Game & {
   description: string | null;
+  description_ja: string | null;
+  description_zh: string | null;
   steam_app_id: number | null;
   game_tags: { tag_id: string; mood_tags: Tag }[];
   tracks: Track[];
@@ -84,6 +87,7 @@ export const authApi = {
   importLibrary: () =>
     authFetch<LibraryImportResult>("/users/me/library/import", { method: "POST" }),
   getLibrary: () => authFetch<UserGame[]>("/users/me/library"),
+  getFeed: () => authFetch<Game[]>("/users/me/feed"),
   rateGame: (gameId: string, rating: number) =>
     authFetch<{ ok: boolean }>(`/users/me/games/${gameId}/rating`, {
       method: "POST",
@@ -111,5 +115,8 @@ export const api = {
     apiFetch<Composer>(`/composers/${id}`),
 
   listTags: () =>
-    apiFetch<Tag[]>(`/games?limit=0`),
+    apiFetch<Tag[]>(`/tags`),
+
+  getTag: (id: string) =>
+    apiFetch<Tag>(`/tags/${id}`),
 };

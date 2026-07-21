@@ -38,5 +38,9 @@ Thumbs.db
 *.log
 npm-debug.log*
 
-# Fly.io
-fly.toml
+# Coverage
+.coverage
+coverage.xml
+
+# Fly.io (api/fly.toml はコミット対象)
+/fly.toml

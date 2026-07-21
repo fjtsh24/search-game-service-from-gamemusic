@@ -99,7 +99,7 @@ async def steam_callback(request: Request):
         max_age=30 * 24 * 3600,
         httponly=True,
         samesite="lax",
-        secure=False,   # 本番環境では True に変更
+        secure=settings.environment == "production",
     )
     return response
 

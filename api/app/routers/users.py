@@ -1,9 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-import httpx
+import json
 
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
+
+from app import cache
 from app.config import settings
 from app.db import get_db
+from app.services.similarity import composer_boost_for_games
 from app.session import require_session
 
 router = APIRouter()
@@ -29,7 +33,7 @@ async def get_library(session: dict = Depends(require_session)):
     db = get_db()
     rows = (
         db.table("user_games")
-        .select("*, games(id, title, title_ja, cover_image_url, steam_app_id)")
+        .select("*, games(id, title, title_ja, release_year, cover_image_url, steam_app_id, game_tags(mood_tags(id, name, name_ja)))")
         .eq("user_id", session["user_id"])
         .order("added_at", desc=True)
         .execute()
@@ -110,14 +114,21 @@ async def rate_game(
         },
         on_conflict="user_id,game_id",
     ).execute()
+    await cache.delete(f"feed:{session['user_id']}")
     return {"ok": True}
 
 
 @router.get("/me/feed")
-async def get_feed(limit: int = 20, session: dict = Depends(require_session)):
-    db = get_db()
+async def get_feed(limit: int = Query(default=20, le=100), session: dict = Depends(require_session)):
     user_id = session["user_id"]
+    cache_key = f"feed:{user_id}"
+    cached = await cache.get(cache_key)
+    if cached:
+        return json.loads(cached)
 
+    db = get_db()
+
+    # 明示的な評価（星3以上）
     rated = (
         db.table("user_games")
         .select("game_id, rating")
@@ -125,11 +136,26 @@ async def get_feed(limit: int = 20, session: dict = Depends(require_session)):
         .gte("rating", 3)
         .execute()
     )
-    if not rated.data:
+    # playtime > 0 かつ未評価 → 暗黙シグナル（重み 0.4 ≒ 星2相当）
+    IMPLICIT_RATING = 2
+    played_unrated = (
+        db.table("user_games")
+        .select("game_id, steam_playtime_minutes")
+        .eq("user_id", user_id)
+        .is_("rating", "null")
+        .gt("steam_playtime_minutes", 0)
+        .execute()
+    )
+
+    if not rated.data and not played_unrated.data:
         return []
 
-    rated_ids = [r["game_id"] for r in rated.data]
-    rating_map = {r["game_id"]: r["rating"] for r in rated.data}
+    rating_map: dict[str, int] = {r["game_id"]: r["rating"] for r in (rated.data or [])}
+    for r in (played_unrated.data or []):
+        if r["game_id"] not in rating_map:
+            rating_map[r["game_id"]] = IMPLICIT_RATING
+
+    rated_ids = list(rating_map.keys())
 
     tags_result = (
         db.table("game_tags")
@@ -138,25 +164,27 @@ async def get_feed(limit: int = 20, session: dict = Depends(require_session)):
         .execute()
     )
     tag_weights: dict[str, float] = {}
-    for row in tags_result.data:
-        w = rating_map.get(row["game_id"], 3) / 5.0
+    for row in (tags_result.data or []):
+        w = rating_map.get(row["game_id"], IMPLICIT_RATING) / 5.0
         tag_weights[row["tag_id"]] = tag_weights.get(row["tag_id"], 0) + w
 
-    if not tag_weights:
-        return []
-
-    top_tags = sorted(tag_weights, key=lambda t: -tag_weights[t])[:10]
-    candidates = (
-        db.table("game_tags")
-        .select("game_id, tag_id")
-        .in_("tag_id", top_tags)
-        .not_.in_("game_id", rated_ids)
-        .execute()
-    )
-
     scores: dict[str, float] = {}
-    for row in candidates.data:
-        scores[row["game_id"]] = scores.get(row["game_id"], 0) + tag_weights.get(row["tag_id"], 0)
+    if tag_weights:
+        top_tags = sorted(tag_weights, key=lambda t: -tag_weights[t])[:10]
+        candidates = (
+            db.table("game_tags")
+            .select("game_id, tag_id")
+            .in_("tag_id", top_tags)
+            .not_.in_("game_id", rated_ids)
+            .execute()
+        )
+        for row in (candidates.data or []):
+            scores[row["game_id"]] = scores.get(row["game_id"], 0) + tag_weights.get(row["tag_id"], 0)
+
+    # 作曲家類似度ブースト（composer_similarities にデータがあれば機能する）
+    composer_boost = await composer_boost_for_games(db, rated_ids, rating_map)
+    for gid, boost in composer_boost.items():
+        scores[gid] = scores.get(gid, 0) + boost
 
     top_ids = sorted(scores, key=lambda g: -scores[g])[:limit]
     if not top_ids:
@@ -164,9 +192,12 @@ async def get_feed(limit: int = 20, session: dict = Depends(require_session)):
 
     games = (
         db.table("games")
-        .select("id, title, title_ja, release_year, cover_image_url")
+        .select("id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja))")
         .in_("id", top_ids)
         .execute()
     )
     order = {gid: i for i, gid in enumerate(top_ids)}
-    return sorted(games.data, key=lambda g: order.get(g["id"], 999))
+    result = sorted(games.data, key=lambda g: order.get(g["id"], 999))
+
+    await cache.set(cache_key, result, ex=600)
+    return result
