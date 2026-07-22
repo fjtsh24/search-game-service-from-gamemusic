@@ -194,6 +194,7 @@ async def get_feed(limit: int = Query(default=20, le=100), session: dict = Depen
         db.table("games")
         .select("id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja))")
         .in_("id", top_ids)
+        .eq("is_discoverable", True)
         .execute()
     )
     order = {gid: i for i, gid in enumerate(top_ids)}
