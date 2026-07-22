@@ -45,12 +45,13 @@ async def list_games(
             )
             data = [row["games"] for row in result.data]
         else:
-            count_result = db.table("games").select("id", count="exact").execute()
+            count_result = db.table("games").select("id", count="exact").eq("is_discoverable", True).execute()
             total = count_result.count or 0
             offset = _random.randint(0, max(0, total - limit))
             result = (
                 db.table("games")
                 .select("id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja))")
+                .eq("is_discoverable", True)
                 .range(offset, offset + limit - 1)
                 .execute()
             )
@@ -70,6 +71,7 @@ async def list_games(
             result = (
                 db.table("games")
                 .select("id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja))")
+                .eq("is_discoverable", True)
                 .limit(limit)
                 .execute()
             )

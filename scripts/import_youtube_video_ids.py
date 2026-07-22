@@ -136,6 +136,7 @@ def fill_existing_tracks(limit: int) -> tuple[int, int, list[str]]:
 
         if video_id:
             db.table("tracks").update({"youtube_video_id": video_id}).eq("id", track["id"]).execute()
+            db.table("games").update({"is_discoverable": True}).eq("id", game_id).execute()
             print(f"  OK: {game_title} → {video_id}")
             done += 1
         else:
@@ -200,6 +201,7 @@ def create_tracks_for_new_games(limit: int) -> tuple[int, int, list[str]]:
                 "youtube_video_id": video_id,
                 "track_number": 1,
             }).execute()
+            db.table("games").update({"is_discoverable": True}).eq("id", game["id"]).execute()
             print(f"  OK: {title} → {video_id}")
             found += 1
         else:
