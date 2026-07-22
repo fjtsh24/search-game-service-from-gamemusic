@@ -60,7 +60,19 @@ STEAM_APP_DETAILS_URL = "https://store.steampowered.com/api/appdetails"
 STEAM_WAIT = 1.2
 PAGE_SIZE = 25
 MIN_REVIEW_COUNT = 10       # これ以下のレビュー数はスコアが不安定なためスキップ
-MAX_CANDIDATE_RATIO = 5     # limit * N 件を候補として最大探索
+MAX_SCORE_CHECKS = 50       # 1回の実行で fetch_review_score を呼ぶ上限（API コスト）
+MAX_PAGES = 20              # 1回の実行で Steam 検索ページを取得する上限（安全弁）
+
+# Steam 検索に繰り返し混入するが登録対象外のアプリ（appid）
+# type チェックで弾かれる DLC・動画・ツール類。スコア API 呼び出しを省くため事前除外。
+EXCLUDED_APP_IDS: set[int] = {
+    2346660,  # DFHack - Dwarf Fortress Modding Engine（MOD ツール）
+    1298590,  # Helltaker: Artbook + Pancake Recipe（DLC）
+    804320,   # Papers, Please - The Short Film（動画）
+    717250,   # Doki Doki Literature Club Fan Pack（DLC）
+    3873750,  # Clair Obscur: Expedition 33 Bonus Edition（music アルバム）
+    3213970,  # Touhou Hero of Ice Fairy DLC1 - Rose Idol（DLC）
+}
 
 SCORE_LABELS = {
     9: "Overwhelmingly Positive",
@@ -277,12 +289,28 @@ def get_or_create_track(game_id: str, title: str) -> str | None:
 
 # ── メインループ ───────────────────────────────────────────────────────────────
 
+def _load_scan_offset() -> int:
+    """前回スキャン終了位置を DB から取得する。"""
+    rows = db.table("system_settings").select("value").eq("key", "steam_scan_offset").execute().data
+    try:
+        return int(rows[0]["value"]) if rows else 0
+    except (IndexError, ValueError):
+        return 0
+
+
+def _save_scan_offset(offset: int) -> None:
+    """次回スキャン開始位置を DB に保存する。"""
+    db.table("system_settings").upsert(
+        {"key": "steam_scan_offset", "value": str(offset), "updated_at": "now()"},
+        on_conflict="key",
+    ).execute()
+
+
 def run(limit: int, min_score: int) -> None:
     label = SCORE_LABELS.get(min_score, f"score>={min_score}")
-    print(f"Steam サウンドトラック（{label} 以上）を最大 {limit} 件取得します")
-    print(f"最大 {limit * MAX_CANDIDATE_RATIO} 件を候補としてスキャンします\n")
+    print(f"Steam サウンドトラック（{label} 以上）を最大 {limit} 件取得します\n")
 
-    # 既登録の steam_app_id を取得（スキャン中のスキップ判定に使用）
+    # 既登録 + 恒久除外の steam_app_id（スキャン中にスコア API を呼ばずスキップ）
     existing_app_ids: set[int] = {
         row["steam_app_id"]
         for row in (
@@ -292,32 +320,40 @@ def run(limit: int, min_score: int) -> None:
             .execute()
             .data or []
         )
-    }
-    print(f"既登録ゲーム: {len(existing_app_ids)} 件\n")
+    } | EXCLUDED_APP_IDS
+    print(f"既登録ゲーム: {len(existing_app_ids) - len(EXCLUDED_APP_IDS)} 件 / 除外リスト: {len(EXCLUDED_APP_IDS)} 件\n")
+
+    # 前回の終了位置から再開（GitHub Actions で毎回同じ上位を再スキャンしない）
+    scan_start = _load_scan_offset()
+    print(f"スキャン開始位置: {scan_start} 件目\n")
 
     # ── フェーズ 1: 候補収集とスコアフィルタリング ───────────────────────────
+    # score_checks: fetch_review_score の呼び出し回数（API コスト）
+    # 既登録スキップは score_checks に含めない → 上位が既登録で埋まっても先に進める
     qualified: list[dict] = []
-    start = 0
-    scanned = 0
-    max_scan = limit * MAX_CANDIDATE_RATIO
+    start = scan_start
+    score_checks = 0
+    pages_fetched = 0
+    reached_end = False
 
-    while len(qualified) < limit and scanned < max_scan:
+    while len(qualified) < limit and score_checks < MAX_SCORE_CHECKS and pages_fetched < MAX_PAGES:
         page = fetch_soundtrack_page(start)
         if not page:
-            print("検索結果の末尾に達しました")
+            print("Steam 検索結果の末尾に達しました。次回は先頭から再スキャンします。")
+            reached_end = True
             break
 
+        pages_fetched += 1
         for item in page:
-            if len(qualified) >= limit or scanned >= max_scan:
+            if len(qualified) >= limit or score_checks >= MAX_SCORE_CHECKS:
                 break
 
-            scanned += 1
-
-            # 非OST タイトルは appid = game_appid なので早期スキップ可能
+            # 非OST: appid = game_appid なので事前チェックでスコア API を節約
             if not _title_looks_like_standalone_ost(item["title"]) and item["appid"] in existing_app_ids:
-                print(f"  skip  {item['title'][:45]:<45}  既登録")
+                print(f"  skip  {item['title'][:45]:<45}  既登録/除外")
                 continue
 
+            score_checks += 1
             score, pos, total = fetch_review_score(item["appid"])
 
             if total < MIN_REVIEW_COUNT:
@@ -333,7 +369,12 @@ def run(limit: int, min_score: int) -> None:
                 qualified.append({**item, "score": score, "pct": pct})
 
         start += PAGE_SIZE
-        print(f"  → スキャン {scanned} 件 / 合格 {len(qualified)} 件\n")
+        print(f"  → {start} 件目まで / スコア確認 {score_checks} 件 / 合格 {len(qualified)} 件\n")
+
+    # 次回スキャン開始位置を保存（末尾到達時は 0 にリセット）
+    next_offset = 0 if reached_end else start
+    _save_scan_offset(next_offset)
+    print(f"次回スキャン開始位置: {next_offset} 件目\n")
 
     # スコア降順→肯定率降順でソート
     qualified.sort(key=lambda x: (-x["score"], -x["pct"]))
