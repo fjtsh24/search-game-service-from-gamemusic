@@ -281,6 +281,7 @@ def run(limit: int, overwrite: bool) -> None:
             for tid, conf in mapped
         ]
         db.table("game_tags").upsert(rows, on_conflict="game_id,tag_id").execute()
+        db.table("games").update({"is_discoverable": True}).eq("id", game["id"]).execute()
         tag_names = [
             next((n for n, d in mood_tag_index.items() if d["id"] == tid), tid)
             for tid, _ in mapped
