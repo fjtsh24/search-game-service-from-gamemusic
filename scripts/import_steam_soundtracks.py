@@ -282,6 +282,19 @@ def run(limit: int, min_score: int) -> None:
     print(f"Steam サウンドトラック（{label} 以上）を最大 {limit} 件取得します")
     print(f"最大 {limit * MAX_CANDIDATE_RATIO} 件を候補としてスキャンします\n")
 
+    # 既登録の steam_app_id を取得（スキャン中のスキップ判定に使用）
+    existing_app_ids: set[int] = {
+        row["steam_app_id"]
+        for row in (
+            db.table("games")
+            .select("steam_app_id")
+            .not_.is_("steam_app_id", "null")
+            .execute()
+            .data or []
+        )
+    }
+    print(f"既登録ゲーム: {len(existing_app_ids)} 件\n")
+
     # ── フェーズ 1: 候補収集とスコアフィルタリング ───────────────────────────
     qualified: list[dict] = []
     start = 0
@@ -299,6 +312,12 @@ def run(limit: int, min_score: int) -> None:
                 break
 
             scanned += 1
+
+            # 非OST タイトルは appid = game_appid なので早期スキップ可能
+            if not _title_looks_like_standalone_ost(item["title"]) and item["appid"] in existing_app_ids:
+                print(f"  skip  {item['title'][:45]:<45}  既登録")
+                continue
+
             score, pos, total = fetch_review_score(item["appid"])
 
             if total < MIN_REVIEW_COUNT:
@@ -330,12 +349,16 @@ def run(limit: int, min_score: int) -> None:
         print(f"[{i}/{len(targets)}] {title} (soundtrack_appid={soundtrack_appid}  {SCORE_LABELS.get(item['score'],'')} {item['pct']}%)")
 
         # ゲーム本体のappidを取得
-        # タイトルがゲーム名そのもの（"Soundtrack" 等を含まない）なら appdetails API 不要
         game_appid = fetch_parent_game_appid(soundtrack_appid, title)
         if game_appid != soundtrack_appid:
             print(f"  親ゲーム appid: {soundtrack_appid} → {game_appid} (fullgame 解決)")
         elif _title_looks_like_standalone_ost(title):
             print(f"  ⚠ 単独OST検出 / fullgame 未解決 → appid={game_appid} をそのまま使用")
+
+        # OST タイトルは親解決後に既登録チェック
+        if game_appid in existing_app_ids:
+            print(f"  skip: 既登録 (appid={game_appid})")
+            continue
 
         # ゲーム本体のメタデータ取得（説明文 en/ja/zh・リリース年・アプリ種別）
         description, description_ja, description_zh, release_year, app_type = fetch_game_metadata(game_appid)
@@ -351,12 +374,13 @@ def run(limit: int, min_score: int) -> None:
         if release_year:
             print(f"  リリース年: {release_year}")
 
-        # ゲーム登録（game_appid = ゲーム本体のappid、カバー画像もゲーム本体を使う）
+        # ゲーム登録
         game_id = upsert_game(title, game_appid, steam_cover_url(game_appid), description, description_ja, description_zh, release_year)
         if not game_id:
             print("  DB 登録失敗、スキップ")
             continue
 
+        existing_app_ids.add(game_appid)
         imported += 1
         print()
 
@@ -376,6 +400,7 @@ def run_backfill(limit: int) -> None:
         .select("id, title, steam_app_id, description, description_ja, description_zh")
         .not_.is_("steam_app_id", "null")
         .or_("description.is.null,description_ja.is.null,description_zh.is.null")
+        .order("updated_at", desc=False)
         .limit(limit)
         .execute()
         .data or []
@@ -414,6 +439,8 @@ def run_backfill(limit: int) -> None:
             print(f"  → 更新: {', '.join(filled)}")
             updated += 1
         else:
+            # 新規データなし: updated_at を更新してキューの末尾に回す（翌日以降は他ゲーム優先）
+            db.table("games").update({"updated_at": "now()"}).eq("id", game["id"]).execute()
             print("  → 取得できる新規データなし（スキップ）")
         print()
 

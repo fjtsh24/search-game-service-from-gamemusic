@@ -187,23 +187,33 @@ def map_to_mood_tags(tag_list: list[dict], mood_tag_index: dict[str, dict]) -> l
 
 def get_games_without_tags(limit: int, overwrite: bool) -> list[dict]:
     """タグ付け対象ゲームを取得。
-    overwrite=False の場合、tags_locked=TRUE のゲームはスキップする。
+
+    tags_locked=FALSE かつ未タグのゲームのみを対象とする。
+    全件 locked 済みまたはタグ登録済みの場合は空リストを返してスキップする。
+    overwrite=True の場合は locked フラグを無視して全ゲームを返す。
     """
-    query = db.table("games").select("id, title")
-    if not overwrite:
-        query = query.eq("tags_locked", False)
-
-    all_games = query.limit(limit * 2).execute().data or []
-
     if overwrite:
-        return all_games[:limit]
+        return (
+            db.table("games")
+            .select("id, title")
+            .limit(limit)
+            .execute()
+            .data or []
+        )
 
     tagged_ids = {
         row["game_id"]
         for row in (db.table("game_tags").select("game_id").execute().data or [])
     }
-    result = [g for g in all_games if g["id"] not in tagged_ids]
-    return result[:limit]
+
+    unlocked = (
+        db.table("games")
+        .select("id, title")
+        .eq("tags_locked", False)
+        .execute()
+        .data or []
+    )
+    return [g for g in unlocked if g["id"] not in tagged_ids][:limit]
 
 
 def lock_game_tags(game_id: str) -> None:
