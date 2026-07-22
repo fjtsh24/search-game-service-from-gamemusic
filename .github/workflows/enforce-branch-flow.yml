@@ -1,0 +1,21 @@
+name: Enforce Branch Flow
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check-source-branch:
+    name: main へのPRは develop からのみ
+    runs-on: ubuntu-latest
+    steps:
+      - name: ソースブランチを確認
+        run: |
+          if [ "${{ github.head_ref }}" != "develop" ]; then
+            echo "::error::main への PR は develop ブランチからのみ作成できます。"
+            echo "ソースブランチ: ${{ github.head_ref }}"
+            echo ""
+            echo "正しいフロー: feature/* → develop → main"
+            exit 1
+          fi
+          echo "OK: develop → main のフローです。"
