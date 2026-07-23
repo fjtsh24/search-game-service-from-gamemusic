@@ -27,11 +27,14 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- game_tags の INSERT / DELETE 時
+-- PostgreSQL 14 は CREATE TRIGGER IF NOT EXISTS 未対応のため DROP IF EXISTS で冪等化
+DROP TRIGGER IF EXISTS trg_discoverable_on_game_tags ON game_tags;
 CREATE TRIGGER trg_discoverable_on_game_tags
 AFTER INSERT OR DELETE ON game_tags
 FOR EACH ROW EXECUTE FUNCTION recalculate_is_discoverable();
 
 -- tracks の youtube_video_id 変更時（UPDATE / INSERT / DELETE）
+DROP TRIGGER IF EXISTS trg_discoverable_on_tracks ON tracks;
 CREATE TRIGGER trg_discoverable_on_tracks
 AFTER INSERT OR UPDATE OF youtube_video_id OR DELETE ON tracks
 FOR EACH ROW EXECUTE FUNCTION recalculate_is_discoverable();
