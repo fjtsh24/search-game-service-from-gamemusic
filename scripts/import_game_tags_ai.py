@@ -117,9 +117,10 @@ def get_target_games(limit: int) -> list[dict]:
 
 def ask_claude(title: str, description: str, tag_names: list[str]) -> list[tuple[str, float]]:
     """説明文からムードタグを推定する。[(tag_name, confidence)] を返す。"""
+    safe_title = title.replace('"', "'")[:200]
     prompt = f"""You are a game music classifier.
 
-Read the following Steam game description for "{title}" and select mood/genre tags that best describe its soundtrack.
+Read the following Steam game description for "{safe_title}" and select mood/genre tags that best describe its soundtrack.
 
 Available tags (choose only from this list): {json.dumps(tag_names, ensure_ascii=False)}
 
@@ -142,7 +143,11 @@ Return ONLY a JSON object. Select up to 5 tags with confidence scores (0.0-1.0).
     if start == -1 or end == 0:
         return []
 
-    data = json.loads(text[start:end])
+    try:
+        data = json.loads(text[start:end])
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Claude returned invalid JSON: {e} | raw: {text[:200]}") from e
+
     valid_names = set(tag_names)
     return [
         (t["name"], float(t["confidence"]))
