@@ -3,6 +3,7 @@ import { Geist } from "next/font/google";
 import Link from "next/link";
 import SearchBar from "@/app/components/SearchBar";
 import AuthButton from "@/app/components/AuthButton";
+import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 
 const geist = Geist({ subsets: ["latin"], variable: "--font-geist" });
@@ -28,6 +29,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </div>
         </header>
         <main className="mx-auto max-w-6xl px-4 py-8">{children}</main>
+        <Analytics />
       </body>
     </html>
   );

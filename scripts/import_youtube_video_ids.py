@@ -44,6 +44,9 @@ db = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 YOUTUBE_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 WAIT = 0.1
 
+http = requests.Session()
+http.headers.update({"User-Agent": "GameMusicDiscovery/0.1.0 (hobby project)"})
+
 
 def _title_matches(game_title: str, video_title: str) -> bool:
     """ゲームタイトルのキーワードが動画タイトルに含まれるか検証する。
@@ -62,7 +65,7 @@ def search_youtube(query: str, game_title: str = "") -> str | None:
     """YouTube で検索して上位 1 件の videoId を返す。
     game_title が指定された場合、動画タイトルとのキーワードマッチを検証する。
     """
-    resp = requests.get(YOUTUBE_SEARCH_URL, params={
+    resp = http.get(YOUTUBE_SEARCH_URL, params={
         "part": "id,snippet",
         "q": query,
         "type": "video",
