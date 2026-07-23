@@ -42,6 +42,9 @@ db = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 LASTFM_BASE = "https://ws.audioscrobbler.com/2.0/"
 LFM_WAIT = 0.3
 
+http = requests.Session()
+http.headers.update({"User-Agent": "GameMusicDiscovery/0.1.0 (hobby project)"})
+
 
 # ── キャッシュクリア ──────────────────────────────────────────────────────────
 
@@ -64,7 +67,7 @@ def clear_cache(tagged_game_ids: list[str], tagged_tag_ids: list[str]) -> None:
         return
     url = f"{UPSTASH_REDIS_URL}/del/{'/'.join(keys)}"
     try:
-        resp = requests.get(url, headers=headers, timeout=5)
+        resp = http.get(url, headers=headers, timeout=5)
         print(f"キャッシュクリア: {resp.json().get('result', '?')} 件削除")
     except Exception as e:
         print(f"キャッシュクリア失敗（無視）: {e}")
@@ -96,7 +99,7 @@ MIN_TAG_COUNT = 1
 def _lastfm_album_search(query: str, game_title: str) -> tuple[str, str] | None:
     """album.search でタイトル一致するアルバムを返す。"""
     time.sleep(LFM_WAIT)
-    resp = requests.get(LASTFM_BASE, params={
+    resp = http.get(LASTFM_BASE, params={
         "method": "album.search",
         "album": query,
         "api_key": LASTFM_API_KEY,
@@ -133,7 +136,7 @@ def search_album(game_title: str) -> tuple[str, str] | None:
 def fetch_album_tags(album: str, artist: str) -> list[dict]:
     """Last.fm album.getTopTags でアルバムタグを取得。"""
     time.sleep(LFM_WAIT)
-    resp = requests.get(LASTFM_BASE, params={
+    resp = http.get(LASTFM_BASE, params={
         "method": "album.getTopTags",
         "album": album,
         "artist": artist,
