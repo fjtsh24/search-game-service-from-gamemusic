@@ -5,16 +5,29 @@
 
 ---
 
-## 現状サマリー（2026-07-22）
+## 現状サマリー（2026-07-23）
 
 | 項目 | 状態 |
 |---|---|
 | M1〜M4 + ベータリリース | ✅ 完了 |
 | 日次バッチ（GitHub Actions） | ✅ 稼働中（JST 04:00） |
-| 登録ゲーム数 | ~195件（毎日~7件追加中） |
-| Last.fmタグ付与（Step 1） | ⚠️ 機能不全（40件中0件）|
+| 登録ゲーム数 | ~201件（毎日~7件追加中） |
+| Last.fmタグ付与（Step 1-A） | ⚠️ 機能不全（40件中1件）|
+| AIタグ付与（Step 1-B） | ❌ 断念（Claude API課金登録困難）|
+| is_discoverable 自動更新 | ✅ DBトリガー実装済み（migration 011） |
 | トラックリスト | ⚠️ 多くのゲームで曲名・尺が未取得 |
+| バッチスクリプト品質 | ✅ User-Agent統一・HTTPエラー対応済み |
 | ユーザー数 | 少数（趣味PJT規模） |
+
+## 2026-07-23 リリース内容
+
+| 変更 | 詳細 | Issue/PR |
+|---|---|---|
+| ✅ Vercel Analytics 組み込み | `@vercel/analytics` 追加、`layout.tsx` に `<Analytics />` 配置 | #27 / PR#28 |
+| ✅ is_discoverable DBトリガー | タグ・動画の削除時も自動でFALSEに戻るよう migration 011 追加 | #26 / PR#31 |
+| ✅ バッチスクリプト品質改善 | 全スクリプトに User-Agent 統一（Session化）、`lastfm_similarities.py` HTTP エラー処理追加 | PR#32 |
+| ✅ YouTube誤動画修正 | 星空列車与白の旅行 の動画を正しいOP動画（MEJC0FsCido）に差し替え | 手動対応 |
+| ❌ Claude AIタグ付与 | 実装済みだが Claude API 課金登録困難のため断念・取り下げ | #29/#16 closed |
 
 ---
 
@@ -44,25 +57,18 @@
 
 タグ・トラックデータが薄いと探索体験全体の質が低い。まずここを解決する。
 
-### 1-A: YouTubeメタデータ＋AIタグ自動付与（→ issue #16）
+### 1-A: タグ付与ソース拡張（→ issue #14）
 
-**目的**: 機能不全のLast.fmタグ付与（Step 1）を置き換え。
+**現状**: Last.fm タグ付与（Step 1-A）は CI で 40件中1件のみ成功と機能不全。  
+**Claude API アプローチは断念**（課金登録の難しさのため、#16/#29 closed）。
 
-**仕組み**: `youtube_video_id` が取得済みのゲームを対象に、YouTube Data APIで動画の説明文・タグ・カテゴリを取得し、Claude API（Haiku等）にムードタグを判定させる。1日1件ペースで順次処理。
-
-```
-youtube_video_id あり + game_tags 未登録のゲーム
-  → YouTube Data API: snippet.description / snippet.tags / topicDetails
-  → Claude Haiku: ムードタグ分類（JSON出力）
-  → game_tags テーブルに保存（added_by='ai'）
-```
-
-**コスト**: YouTube API 1ユニット/件 + Claude Haiku ~$0.00005/件。年間ほぼ無料。
+**代替候補（検討中）**:
+- **Steam ストアタグ**: `appdetails` の `genres` / `categories` フィールドを流用。追加 API キー不要で即実装可能。精度はユーザー寄りだが十分な出発点になりうる。
+- **Bandcamp 説明文**: インディーに強いが公式 API なし。利用規約確認後に判断（→ issue #14）。
 
 **実装タスク**:
-- [ ] `import_game_tags_ai.py` 新規作成
-- [ ] GitHub Actions Step 1 を差し替え（Last.fm → AI、または並列化）
-- [ ] `game_tags.added_by` に `'ai'` 識別子を追加
+- [ ] Steam `appdetails` の `genres` フィールドからタグを生成する処理を `import_game_tags.py` に追加（追加 API キー不要）
+- [ ] Bandcamp 対応は利用規約確認後に判断（→ #14）
 
 ---
 
@@ -91,9 +97,9 @@ Last.fm album.getInfo
 
 ### 1-C: タグ付与ソース拡張 Bandcamp（→ issue #14）
 
-**目的**: 1-A（AI）でも取得できないゲームへの補完。Bandcamp はインディーゲームのサントラ販売に多く使われており、詳細なタグが付いている。
+**目的**: インディーゲームのサントラ販売に多く使われており、詳細なタグが付いている。
 
-**注意**: 公式APIなし。スクレイピングの利用規約確認が必要。優先度は 1-A の効果を見てから判断する。
+**注意**: 公式APIなし。スクレイピングの利用規約確認が必要。1-A（Steam タグ）の効果を見てから判断する。
 
 ---
 
@@ -233,13 +239,18 @@ Phase 3-A / 3-B / 3-C は独立して進められる
 
 ## GitHub Issues 対応表
 
-| Issue | Phase | 内容 |
-|---|---|---|
-| #14 | 1-C | タグ付与ソース拡張（Bandcamp等） |
-| #15 | 1-B | トラックリスト取得・保存・表示 |
-| #16 | 1-A | YouTubeメタデータ＋AIタグ自動付与 |
-| #17 | 2-A | AIユーザー好みプロファイリング |
-| #19 | 即時 | GitHub Secret Scanning + Dependabot 有効化 |
-| #20 | 運用 | システム監視（UptimeRobot + Sentry）|
-| #21 | 1-B | 作曲家データの取得・保存方法の確立 |
-| #22 | 運用 | イベントトラッキング追加（PostHog等）|
+| Issue | Phase | 内容 | 状態 |
+|---|---|---|---|
+| #14 | 1-C | タグ付与ソース拡張（Bandcamp等） | 🔵 Open |
+| #15 | 1-B | トラックリスト取得・保存・表示 | 🔵 Open |
+| #16 | 1-A | YouTubeメタデータ＋AIタグ自動付与 | ❌ Closed（Claude API断念） |
+| #17 | 2-A | AIユーザー好みプロファイリング | 🔵 Open（タグデータ充実後） |
+| #19 | 即時 | GitHub Secret Scanning + Dependabot 有効化 | 🔵 Open（設定作業） |
+| #20 | 運用 | システム監視（UptimeRobot + Sentry） | 🔵 Open |
+| #21 | 1-B | 作曲家データの取得・保存方法の確立 | 🔵 Open |
+| #22 | 運用 | イベントトラッキング追加（PostHog等） | 🔵 Open（低優先） |
+| #26 | インフラ | is_discoverable DBトリガー | ✅ Closed（migration 011） |
+| #27 | フロント | Vercel Analytics 組み込み | ✅ Closed（PR #28） |
+| #29 | 1-A | Steam説明文＋AIタグ付与 | ❌ Closed（Claude API断念） |
+| #33 | 技術負債 | Steam store search を公式APIへ移行 | 🔵 Open（Low優先） |
+| #34 | 技術負債 | lastfm_similarities に --limit 追加 | 🔵 Open（Low優先） |
