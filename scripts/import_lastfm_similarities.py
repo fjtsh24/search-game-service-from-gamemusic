@@ -28,10 +28,13 @@ SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 db = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 LASTFM_BASE = "https://ws.audioscrobbler.com/2.0/"
 
+http = requests.Session()
+http.headers.update({"User-Agent": "GameMusicDiscovery/0.1.0 (hobby project)"})
+
 
 def fetch_similar_artists(artist_name: str) -> list[dict]:
     """Last.fm から類似アーティストを取得（最大 10 件）"""
-    resp = requests.get(LASTFM_BASE, params={
+    resp = http.get(LASTFM_BASE, params={
         "method": "artist.getSimilar",
         "artist": artist_name,
         "limit": 10,
@@ -39,7 +42,11 @@ def fetch_similar_artists(artist_name: str) -> list[dict]:
         "api_key": LASTFM_API_KEY,
         "format": "json",
     }, timeout=10)
+    if not resp.ok:
+        return []
     data = resp.json()
+    if "error" in data:
+        return []
     return data.get("similarartists", {}).get("artist", [])
 
 
