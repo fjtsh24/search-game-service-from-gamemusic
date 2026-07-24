@@ -40,7 +40,8 @@ async def set(key: str, value: str | dict | list, ex: int = 300) -> None:
     if not isinstance(value, str):
         value = json.dumps(value, ensure_ascii=False)
     # POST ボディで送信（URL パス埋め込みだと大きなレスポンスで URL too long になる）
-    await _get_client().post("/", json=["SET", key, value, "EX", str(ex)])
+    # value は上で str 化済み。Upstash REST API のコマンド名は大文字小文字不問だが小文字に統一
+    await _get_client().post("/", json=["set", key, value, "ex", str(ex)])
 
 
 async def delete(key: str) -> None:

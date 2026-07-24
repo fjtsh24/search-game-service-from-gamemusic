@@ -93,10 +93,17 @@ def _find_ost_appid(game_title: str, game_appid: int) -> int | None:
         name = item.get("name", "")
         if not any(kw in name.lower() for kw in _OST_KEYWORDS):
             continue
-        m = re.search(r"/apps/(\d+)/", item.get("logo", ""))
-        if not m:
-            continue
-        candidate_appid = int(m.group(1))
+
+        # appid の取得: 直接フィールド → logo URL → icon URL の順で試みる
+        if item.get("appid"):
+            candidate_appid = int(item["appid"])
+        else:
+            logo_or_icon = item.get("logo", "") or item.get("icon", "") or ""
+            m = re.search(r"/apps/(\d+)/", logo_or_icon)
+            if not m:
+                print(f"  SKIP（appid 解析不可）: item={list(item.keys())}")
+                continue
+            candidate_appid = int(m.group(1))
 
         time.sleep(DISCOVER_WAIT)
         try:
@@ -241,42 +248,52 @@ def _save_tracks_and_composers(
     scraped_tracks: list[dict],
     credits: dict,
 ) -> None:
+    """トラックと作曲家をDBに保存する。
+    既存トラックは track_number をキーに更新（id を保持）し、
+    スクレイプに存在しなくなったトラックのみ削除する。
+    削除→再挿入を避けることで外部参照（track_composers 等）の整合性を保つ。
+    """
     game_id = game["id"]
-
-    # 既存トラックから youtube_video_id を回収（再挿入時に引き継ぐ）
-    existing = (
-        db.table("tracks")
-        .select("id, youtube_video_id")
-        .eq("game_id", game_id)
-        .execute()
-        .data or []
-    )
-    preserved_yt = next(
-        (ex["youtube_video_id"] for ex in existing if ex.get("youtube_video_id")),
-        None,
-    )
 
     if not scraped_tracks:
         return
 
-    # 既存トラックをすべて削除してからスクレイプ結果を再挿入
-    # （unique constraint (game_id, track_number) の競合を確実に回避）
-    if existing:
-        db.table("tracks").delete().eq("game_id", game_id).execute()
+    # 既存トラックを track_number でインデックス化
+    existing = (
+        db.table("tracks")
+        .select("id, track_number")
+        .eq("game_id", game_id)
+        .execute()
+        .data or []
+    )
+    existing_by_number: dict[int, str] = {ex["track_number"]: ex["id"] for ex in existing}
+    scraped_numbers = {t["number"] for t in scraped_tracks}
 
     saved_track_ids: list[str] = []
-    for i, t in enumerate(scraped_tracks):
-        payload: dict = {
-            "game_id": game_id,
+    for t in scraped_tracks:
+        track_payload = {
             "title": t["title"],
-            "track_number": t["number"],
             "duration_seconds": t["duration_seconds"],
         }
-        if i == 0 and preserved_yt:
-            payload["youtube_video_id"] = preserved_yt
-        result = db.table("tracks").insert(payload).execute()
-        if result.data:
-            saved_track_ids.append(result.data[0]["id"])
+        existing_id = existing_by_number.get(t["number"])
+        if existing_id:
+            # 既存トラックを更新（id・youtube_video_id を保持）
+            db.table("tracks").update(track_payload).eq("id", existing_id).execute()
+            saved_track_ids.append(existing_id)
+        else:
+            # 新規トラックを挿入
+            result = db.table("tracks").insert({
+                "game_id": game_id,
+                "track_number": t["number"],
+                **track_payload,
+            }).execute()
+            if result.data:
+                saved_track_ids.append(result.data[0]["id"])
+
+    # スクレイプ結果に存在しない古いトラックを削除
+    obsolete_ids = [eid for num, eid in existing_by_number.items() if num not in scraped_numbers]
+    for eid in obsolete_ids:
+        db.table("tracks").delete().eq("id", eid).execute()
 
     # 作曲家クレジット（", " や " & " で区切られた複数名を個別に分割）
     composer_names = list({
@@ -289,13 +306,16 @@ def _save_tracks_and_composers(
         return
 
     name_to_id = _upsert_composers(composer_names)
+
+    # track_composers は全置換（作曲家クレジットが変わる可能性があるため）
+    db.table("track_composers").delete().in_("track_id", saved_track_ids).execute()
     rows = [
         {"track_id": tid, "composer_id": cid, "is_primary": True}
         for tid in saved_track_ids
         for cid in name_to_id.values()
     ]
     if rows:
-        db.table("track_composers").upsert(rows, on_conflict="track_id,composer_id").execute()
+        db.table("track_composers").insert(rows).execute()
 
 
 def run_scrape(limit: int) -> None:

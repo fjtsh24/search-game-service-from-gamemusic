@@ -77,8 +77,14 @@ WHERE EXISTS (
   WHERE t.game_id = g.id AND t.youtube_flagged = TRUE
 );
 
--- 6. tracks.youtube_video_id をクリア（OST 全体動画は games に移行済み）
---    トリガーが発火するが games.youtube_video_id は設定済みのため is_discoverable は維持される
+-- 6. tracks.youtube_video_id をクリア（OST 全体動画は games.youtube_video_id へ移行済み）
+--    【意図的な一括クリア】
+--    旧設計では OST 全体の動画を tracks.youtube_video_id (track_number=1) に格納していたが、
+--    概念上誤りがあるため games.youtube_video_id へ移管した（ステップ 4 で完了）。
+--    tracks.youtube_video_id は将来のトラック別動画（開発元が曲単位で公開する場合）専用に温存する。
+--    移行前データは games.youtube_video_id に保存済みのため情報損失なし。
+--    ※ 移行前の DB スナップショットは Supabase ダッシュボードの Point-in-Time Recovery で参照可能。
+--    トリガーが発火するが games.youtube_video_id は設定済みのため is_discoverable は維持される。
 UPDATE tracks SET youtube_video_id = NULL WHERE youtube_video_id IS NOT NULL;
 
 -- 7. is_discoverable を全件再計算（移行後の最終確認）
