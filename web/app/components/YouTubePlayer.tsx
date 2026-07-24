@@ -5,14 +5,29 @@ import Link from "next/link";
 import { Track, authApi } from "@/app/lib/api";
 
 type Props = {
+  youtubeVideoId: string | null;
   tracks: Track[];
   gameTitle: string;
   gameId: string;
 };
 
-export default function YouTubePlayer({ tracks, gameTitle, gameId }: Props) {
-  const playable = tracks.filter((t) => t.youtube_video_id);
-  const [activeIndex, setActiveIndex] = useState(0);
+function formatDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function totalDurationLabel(tracks: Track[]): string | null {
+  const total = tracks.reduce((sum, t) => sum + (t.duration_seconds ?? 0), 0);
+  if (total === 0) return null;
+  if (total < 3600) return `${Math.floor(total / 60)}分`;
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  return `${h}時間${m > 0 ? `${m}分` : ""}`;
+}
+
+export default function YouTubePlayer({ youtubeVideoId, tracks, gameTitle, gameId }: Props) {
+  const sorted = [...tracks].sort((a, b) => (a.track_number ?? 0) - (b.track_number ?? 0));
   const [flagged, setFlagged] = useState(false);
   const [flagging, setFlagging] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -21,135 +36,157 @@ export default function YouTubePlayer({ tracks, gameTitle, gameId }: Props) {
     authApi.getMe().then(() => setIsLoggedIn(true)).catch(() => {});
   }, []);
 
-  if (playable.length === 0) {
-    return (
-      <section className="space-y-3">
+  // YouTube プレーヤー直下に作曲家を表示（全トラックの重複排除）
+  const allComposers = sorted
+    .flatMap((t) => t.track_composers?.map((tc) => tc.composers) ?? [])
+    .filter(Boolean)
+    .filter((c, i, arr) => arr.findIndex((x) => x.id === c.id) === i);
+
+  const durLabel = totalDurationLabel(sorted);
+
+  return (
+    <section className="flex flex-col gap-4 lg:flex-row lg:items-start">
+
+      {/* 左: YouTube プレーヤー */}
+      <div className="flex-1 min-w-0 space-y-3">
         <h2 className="text-sm font-semibold uppercase tracking-wider text-white/40">
           サウンドトラック
         </h2>
-        <div className="aspect-video w-full max-w-2xl rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center">
-          <p className="text-sm text-white/30">動画を準備中です</p>
-        </div>
-      </section>
-    );
-  }
 
-  const active = playable[activeIndex];
-  const composers = active.track_composers
-    ?.map((tc) => tc.composers)
-    .filter(Boolean)
-    .filter((c, i, arr) => arr.findIndex((x) => x.id === c.id) === i) ?? [];
+        {youtubeVideoId ? (
+          <>
+            <div className="aspect-video w-full overflow-hidden rounded-2xl bg-black">
+              <iframe
+                src={`https://www.youtube.com/embed/${youtubeVideoId}?rel=0`}
+                title={`${gameTitle} Soundtrack`}
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+                className="h-full w-full"
+              />
+            </div>
 
-  return (
-    <section className="space-y-3">
-      <h2 className="text-sm font-semibold uppercase tracking-wider text-white/40">
-        サウンドトラック
-      </h2>
-
-      <div className="flex flex-col gap-4 lg:flex-row">
-        {/* プレーヤー */}
-        <div className="flex-1 space-y-3">
-          <div className="aspect-video w-full overflow-hidden rounded-2xl bg-black">
-            <iframe
-              key={active.youtube_video_id}
-              src={`https://www.youtube.com/embed/${active.youtube_video_id}?rel=0`}
-              title={active.title ?? gameTitle}
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-              allowFullScreen
-              className="h-full w-full"
-            />
-          </div>
-
-          {/* アクティブトラックの情報 */}
-          <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 space-y-1">
-            {active.track_number && (
-              <p className="text-xs text-white/30">Track {active.track_number}</p>
-            )}
-            <p className="font-medium text-white">{active.title ?? gameTitle}</p>
-            {composers.length > 0 && (
-              <p className="text-sm text-white/50">
-                作曲:{" "}
-                {composers.map((c, i) => (
-                  <span key={c.id}>
-                    {i > 0 && " / "}
-                    <Link
-                      href={`/composers/${c.id}`}
-                      className="text-indigo-400 hover:text-indigo-300 hover:underline"
-                    >
-                      {c.name}
-                    </Link>
-                  </span>
-                ))}
-              </p>
-            )}
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3 text-xs">
+              {allComposers.length > 0 && (
+                <span className="text-white/40">
+                  作曲:{" "}
+                  {allComposers.map((c, i) => (
+                    <span key={c.id}>
+                      {i > 0 && " / "}
+                      <Link
+                        href={`/composers/${c.id}`}
+                        className="text-indigo-400 hover:text-indigo-300 hover:underline"
+                      >
+                        {c.name}
+                      </Link>
+                    </span>
+                  ))}
+                </span>
+              )}
               <a
-                href={`https://www.youtube.com/watch?v=${active.youtube_video_id}`}
+                href={`https://www.youtube.com/watch?v=${youtubeVideoId}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-block text-xs text-white/30 hover:text-white/60"
+                className="text-white/25 hover:text-white/50"
               >
                 YouTube で開く ↗
               </a>
               {isLoggedIn && (
                 flagged ? (
-                  <span className="text-xs text-white/30">報告済み</span>
+                  <span className="text-white/25">報告済み</span>
                 ) : (
                   <button
                     disabled={flagging}
                     onClick={async () => {
                       if (!confirm("この動画が違うと報告しますか？")) return;
                       setFlagging(true);
-                      try {
-                        await authApi.flagVideo(gameId);
-                        setFlagged(true);
-                      } catch {
-                        // ignore
-                      } finally {
-                        setFlagging(false);
-                      }
+                      try { await authApi.flagVideo(gameId); setFlagged(true); }
+                      catch { /* ignore */ }
+                      finally { setFlagging(false); }
                     }}
-                    className="text-xs text-white/20 hover:text-white/50 disabled:opacity-50"
+                    className="text-white/20 hover:text-white/50 disabled:opacity-50"
                   >
                     {flagging ? "報告中..." : "動画が違う場合"}
                   </button>
                 )
               )}
             </div>
+          </>
+        ) : (
+          <div className="aspect-video w-full rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center">
+            <p className="text-sm text-white/30">動画を準備中です</p>
           </div>
-        </div>
+        )}
+      </div>
 
-        {/* トラックリスト（複数ある場合のみ表示） */}
-        {playable.length > 1 && (
-          <div className="w-full lg:w-64 shrink-0">
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/30">
-              トラック一覧 ({playable.length})
-            </p>
-            <ul className="space-y-1 max-h-80 overflow-y-auto">
-              {playable.map((track, i) => {
-                const isActive = i === activeIndex;
+      {/* 右: トラックリスト（固定高さ + スクロール） */}
+      {sorted.length > 0 && (
+        <div className="lg:w-72 shrink-0 space-y-2">
+          <div className="flex items-baseline gap-2">
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-white/40">
+              トラックリスト
+            </h3>
+            <span className="text-xs text-white/25">
+              {sorted.length}曲{durLabel ? ` · ${durLabel}` : ""}
+            </span>
+          </div>
+
+          <div className="rounded-xl border border-white/10 bg-white/5 overflow-hidden flex flex-col">
+            <ul className="max-h-52 lg:max-h-[420px] overflow-y-auto divide-y divide-white/5">
+              {sorted.map((track) => {
+                const composerNames = track.track_composers
+                  ?.map((tc) => tc.composers?.name)
+                  .filter(Boolean) ?? [];
+
                 return (
-                  <li key={track.id}>
-                    <button
-                      onClick={() => setActiveIndex(i)}
-                      className={`w-full rounded-lg px-3 py-2 text-left text-sm transition ${
-                        isActive
-                          ? "bg-indigo-600 text-white"
-                          : "text-white/60 hover:bg-white/10 hover:text-white"
-                      }`}
-                    >
-                      <span className="mr-2 text-xs opacity-50">
-                        {track.track_number ?? i + 1}.
+                  <li
+                    key={track.id}
+                    className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-white/5 transition"
+                  >
+                    <span className="w-6 shrink-0 text-right text-xs text-white/20 tabular-nums">
+                      {track.track_number ?? "–"}
+                    </span>
+
+                    <div className="flex-1 min-w-0">
+                      <span className="block text-white/80 line-clamp-1 text-xs leading-tight">
+                        {track.title}
                       </span>
-                      <span className="line-clamp-1">{track.title}</span>
-                    </button>
+                      {composerNames.length > 0 && (
+                        <span className="block text-[10px] text-white/30 line-clamp-1">
+                          {composerNames.join(" / ")}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* トラック別動画がある場合のみ表示（将来対応、現在は未使用） */}
+                    {track.youtube_video_id && (
+                      <a
+                        href={`https://www.youtube.com/watch?v=${track.youtube_video_id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="この曲の動画を YouTube で見る"
+                        className="shrink-0 rounded px-1 py-0.5 text-[10px] bg-red-900/40 text-red-400 hover:bg-red-800/60 transition"
+                      >
+                        ▶
+                      </a>
+                    )}
+
+                    {track.duration_seconds != null && (
+                      <span className="shrink-0 text-[10px] text-white/20 tabular-nums">
+                        {formatDuration(track.duration_seconds)}
+                      </span>
+                    )}
                   </li>
                 );
               })}
             </ul>
+            {durLabel && (
+              <div className="border-t border-white/5 px-3 py-1.5 text-right text-[10px] text-white/20 shrink-0">
+                合計 {durLabel}
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </section>
   );
 }

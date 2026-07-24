@@ -9,7 +9,6 @@ Upstash Redis REST API を使ったシンプルなキャッシュラッパー。
 """
 
 import json
-from urllib.parse import quote
 
 import httpx
 
@@ -40,9 +39,9 @@ async def set(key: str, value: str | dict | list, ex: int = 300) -> None:
     """キャッシュに値をセット。ex は秒単位の TTL（デフォルト 5 分）。"""
     if not isinstance(value, str):
         value = json.dumps(value, ensure_ascii=False)
-    # JSON や特殊文字が URL パスセグメントに入ると壊れるので URL エンコード
-    encoded = quote(value, safe="")
-    await _get_client().get(f"/set/{key}/{encoded}/ex/{ex}")
+    # POST ボディで送信（URL パス埋め込みだと大きなレスポンスで URL too long になる）
+    # value は上で str 化済み。Upstash REST API のコマンド名は大文字小文字不問だが小文字に統一
+    await _get_client().post("/", json=["set", key, value, "ex", str(ex)])
 
 
 async def delete(key: str) -> None:

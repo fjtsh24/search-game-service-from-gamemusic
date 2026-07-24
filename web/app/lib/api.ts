@@ -40,6 +40,7 @@ export type Track = {
   id: string;
   title: string;
   track_number: number | null;
+  duration_seconds: number | null;
   youtube_video_id: string | null;
   track_composers: { is_primary: boolean; composers: { id: string; name: string } }[];
 };
@@ -49,6 +50,8 @@ export type GameDetail = Game & {
   description_ja: string | null;
   description_zh: string | null;
   steam_app_id: number | null;
+  youtube_video_id: string | null;
+  youtube_flagged: boolean;
   game_tags: { tag_id: string; mood_tags: Tag }[];
   tracks: Track[];
 };
