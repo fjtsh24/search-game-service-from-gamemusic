@@ -117,9 +117,14 @@ export default async function GamePage({ params }: { params: Promise<{ id: strin
         </div>
       </div>
 
-      {/* YouTubeプレーヤー */}
-      {game.tracks?.length > 0 && (
-        <YouTubePlayer tracks={game.tracks} gameTitle={game.title} gameId={id} />
+      {/* YouTubeプレーヤー + トラックリスト */}
+      {(game.youtube_video_id || game.tracks?.length > 0) && (
+        <YouTubePlayer
+          youtubeVideoId={game.youtube_video_id}
+          tracks={game.tracks ?? []}
+          gameTitle={game.title}
+          gameId={id}
+        />
       )}
 
       {/* 音楽的に似たゲーム */}

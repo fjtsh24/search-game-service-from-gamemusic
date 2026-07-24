@@ -38,7 +38,7 @@ env:
 jobs:
   # ── 毎日自動実行: 優先度順の拡充パイプライン ──────────────────────────────
   daily-enrichment:
-    name: 毎日データ拡充（タグ→説明文補完→YouTube→新規追加）
+    name: 毎日データ拡充（タグ→説明文補完→YouTube→新規追加→OST取得）
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
@@ -62,10 +62,17 @@ jobs:
       - name: Step 3 — YouTube VideoID 既存補完（20件、locked スキップ）
         run: python3 scripts/import_youtube_video_ids.py --limit 20 --phase 1
 
-      - name: Step 4 — Steam 新規ゲーム追加（10件）
-        run: python3 scripts/import_steam_soundtracks.py --limit 10
+      - name: Step 4 — Steam 新規ゲーム追加（5件）
+        run: python3 scripts/import_steam_soundtracks.py --limit 5
 
-      - name: Step 5 — 動画報告済みトラックの確認（要管理者レビュー）
+      - name: Step 5 — Steam OST appID 発見（50件、APIベース）
+        run: python3 scripts/import_steam_ost_data.py --phase discover --limit 50
+
+      - name: Step 6 — Steam OST ページ取得（10件、2分間隔）
+        timeout-minutes: 30
+        run: python3 scripts/import_steam_ost_data.py --phase scrape --limit 10
+
+      - name: Step 7 — 動画報告済みトラックの確認（要管理者レビュー）
         run: |
           python3 - <<'EOF'
           import os
