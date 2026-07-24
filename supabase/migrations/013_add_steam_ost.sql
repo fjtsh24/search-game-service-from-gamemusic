@@ -1,3 +1,0 @@
-ALTER TABLE games
-  ADD COLUMN IF NOT EXISTS steam_ost_appid BIGINT UNIQUE,
-  ADD COLUMN IF NOT EXISTS steam_ost_scraped_at TIMESTAMPTZ;
