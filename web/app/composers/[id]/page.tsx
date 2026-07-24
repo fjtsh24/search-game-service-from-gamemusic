@@ -16,7 +16,7 @@ export default async function ComposerPage({ params }: { params: Promise<{ id: s
     : null;
 
   const featuredTracks = featuredGame?.tracks ?? [];
-  const hasPlayer = featuredTracks.some((t) => t.youtube_video_id);
+  const hasPlayer = !!(featuredGame?.youtube_video_id || featuredTracks.length > 0);
 
   return (
     <div className="space-y-8">
@@ -42,7 +42,12 @@ export default async function ComposerPage({ params }: { params: Promise<{ id: s
               {featuredGame.title} →
             </Link>
           </div>
-          <YouTubePlayer tracks={featuredTracks} gameTitle={featuredGame.title} gameId={featuredGame.id} />
+          <YouTubePlayer
+            youtubeVideoId={featuredGame.youtube_video_id}
+            tracks={featuredTracks}
+            gameTitle={featuredGame.title}
+            gameId={featuredGame.id}
+          />
         </section>
       )}
 

@@ -91,9 +91,9 @@ async def get_game(game_id: str):
     result = (
         db.table("games")
         .select(
-            "id, title, title_ja, description, description_ja, description_zh, release_year, cover_image_url, steam_app_id,"
+            "id, title, title_ja, description, description_ja, description_zh, release_year, cover_image_url, steam_app_id, youtube_video_id, youtube_flagged,"
             "game_tags(tag_id, mood_tags(id, name, name_ja)),"
-            "tracks(id, title, track_number, youtube_video_id,"
+            "tracks(id, title, track_number, duration_seconds, youtube_video_id,"
             "  track_composers(is_primary, composers(id, name)))"
         )
         .eq("id", game_id)
@@ -110,17 +110,14 @@ async def get_game(game_id: str):
 @router.post("/{game_id}/flag-video")
 async def flag_video(game_id: str, session: dict = Depends(require_session)):
     """再生中の YouTube 動画が違うとユーザーが報告する。
-    VideoID は即座には削除せず、tracks.youtube_flagged = TRUE をセットして管理者確認待ちにする。
+    VideoID は即座には削除せず、games.youtube_flagged = TRUE をセットして管理者確認待ちにする。
     """
     db = get_db()
-    result = db.table("tracks").select("id").eq("game_id", game_id).execute()
+    result = db.table("games").select("id").eq("id", game_id).execute()
     if not result.data:
-        raise HTTPException(status_code=404, detail="Track not found")
+        raise HTTPException(status_code=404, detail="Game not found")
 
-    track_ids = [r["id"] for r in result.data]
-    for tid in track_ids:
-        db.table("tracks").update({"youtube_flagged": True}).eq("id", tid).execute()
-
+    db.table("games").update({"youtube_flagged": True}).eq("id", game_id).execute()
     await cache.delete(f"games:detail:{game_id}")
     return {"flagged": True}
 
