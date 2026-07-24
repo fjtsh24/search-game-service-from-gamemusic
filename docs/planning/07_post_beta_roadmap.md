@@ -5,18 +5,21 @@
 
 ---
 
-## 現状サマリー（2026-07-23）
+## 現状サマリー（2026-07-24）
 
 | 項目 | 状態 |
 |---|---|
 | M1〜M4 + ベータリリース | ✅ 完了 |
-| 日次バッチ（GitHub Actions） | ✅ 稼働中（JST 04:00） |
-| 登録ゲーム数 | ~201件（毎日~7件追加中） |
-| Last.fmタグ付与（Step 1-A） | ⚠️ 機能不全（40件中1件）|
-| AIタグ付与（Step 1-B） | ❌ 断念（Claude API課金登録困難）|
-| is_discoverable 自動更新 | ✅ DBトリガー実装済み（migration 011） |
-| トラックリスト | ⚠️ 多くのゲームで曲名・尺が未取得 |
-| バッチスクリプト品質 | ✅ User-Agent統一・HTTPエラー対応済み |
+| 日次バッチ（GitHub Actions） | ✅ 稼働中（JST 04:00、Step 8 まで拡充） |
+| 登録ゲーム数 | ~200件以上（毎日~7件追加中） |
+| Last.fm タグ付与 | ⚠️ カバレッジ低（多くのゲームで取得失敗・locked） |
+| YouTube 動画 | ✅ `games.youtube_video_id` に移管済み |
+| is_discoverable 自動更新 | ✅ DB トリガー実装済み（game_tags / youtube_video_id 両対応） |
+| トラックリスト | ⚠️ Steam OST スクレイプ稼働中（~40% のゲームでデータ取得済み） |
+| トラックリスト UI | ✅ YouTube プレーヤー横にリスト表示（PR #40） |
+| 作曲家類似度更新 | ✅ 日次パイプライン Step 8 に組み込み済み（PR #60） |
+| スキーマ管理 | ✅ schema.sql 一元管理（migrations 廃止、実 DB と照合済み） |
+| 依存パッケージ | ✅ 主要パッケージ最新版に更新済み（2026-07-24） |
 | ユーザー数 | 少数（趣味PJT規模） |
 
 ## 2026-07-23 リリース内容
@@ -28,6 +31,19 @@
 | ✅ バッチスクリプト品質改善 | 全スクリプトに User-Agent 統一（Session化）、`lastfm_similarities.py` HTTP エラー処理追加 | PR#32 |
 | ✅ YouTube誤動画修正 | 星空列車与白の旅行 の動画を正しいOP動画（MEJC0FsCido）に差し替え | 手動対応 |
 | ❌ Claude AIタグ付与 | 実装済みだが Claude API 課金登録困難のため断念・取り下げ | #29/#16 closed |
+
+---
+
+## 2026-07-24 リリース内容
+
+| 変更 | 詳細 | PR |
+|---|---|---|
+| ✅ YouTube 動画 games テーブル移管 | `games.youtube_video_id` / `games.youtube_flagged` 追加。OST全体とトラック別を概念分離 | PR#40 |
+| ✅ トラックリスト UI | ゲーム詳細ページにプレーヤー横並びリスト表示。「似たゲーム」への視認性を改善 | PR#40 |
+| ✅ スキーマ一元管理 | `supabase/schema.sql` へ移行（migrations 廃止）。実 DB と psql 照合済み | PR#40 |
+| ✅ daily-import バグ修正 | `--phase` エラー・`youtube_flagged` 誤参照・キャッシュ URL too long を修正 | PR#60 |
+| ✅ lastfm_similarities 日次化 | 毎日30件・未登録作曲家優先。`--limit` 引数追加 | PR#60 |
+| ✅ 依存パッケージ更新 | next 16.2.11、react 19.2.8、@types/node ^26、pytest 9、Actions v7 等 | PR#58/59 |
 
 ---
 
@@ -242,15 +258,15 @@ Phase 3-A / 3-B / 3-C は独立して進められる
 | Issue | Phase | 内容 | 状態 |
 |---|---|---|---|
 | #14 | 1-C | タグ付与ソース拡張（Bandcamp等） | 🔵 Open |
-| #15 | 1-B | トラックリスト取得・保存・表示 | 🔵 Open |
+| #15 | 1-B | トラックリスト取得・保存・表示 | ⚠️ 進行中（Steam OST スクレイプ実装済み・UI追加済み。トラック別VideoID未実装） |
 | #16 | 1-A | YouTubeメタデータ＋AIタグ自動付与 | ❌ Closed（Claude API断念） |
 | #17 | 2-A | AIユーザー好みプロファイリング | 🔵 Open（タグデータ充実後） |
-| #19 | 即時 | GitHub Secret Scanning + Dependabot 有効化 | 🔵 Open（設定作業） |
+| #19 | 即時 | GitHub Secret Scanning + Dependabot 有効化 | ⚠️ 進行中（Dependabot 有効化済み） |
 | #20 | 運用 | システム監視（UptimeRobot + Sentry） | 🔵 Open |
-| #21 | 1-B | 作曲家データの取得・保存方法の確立 | 🔵 Open |
+| #21 | 1-B | 作曲家データの取得・保存方法の確立 | ⚠️ 進行中（Steam OST スクレイプで track_composers 蓄積中） |
 | #22 | 運用 | イベントトラッキング追加（PostHog等） | 🔵 Open（低優先） |
-| #26 | インフラ | is_discoverable DBトリガー | ✅ Closed（migration 011） |
+| #26 | インフラ | is_discoverable DBトリガー | ✅ Closed（migration 011・015） |
 | #27 | フロント | Vercel Analytics 組み込み | ✅ Closed（PR #28） |
 | #29 | 1-A | Steam説明文＋AIタグ付与 | ❌ Closed（Claude API断念） |
 | #33 | 技術負債 | Steam store search を公式APIへ移行 | 🔵 Open（Low優先） |
-| #34 | 技術負債 | lastfm_similarities に --limit 追加 | 🔵 Open（Low優先） |
+| #34 | 技術負債 | lastfm_similarities に --limit 追加 | ✅ Closed（PR #60） |
