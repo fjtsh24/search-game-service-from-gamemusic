@@ -2,12 +2,16 @@
 Last.fm から作曲家間の類似度データを取得して composer_similarities テーブルに保存。
 
 使い方:
-  python3 scripts/import_lastfm_similarities.py
+  python3 scripts/import_lastfm_similarities.py [--limit N]
+
+  --limit N : 処理する作曲家数の上限（未指定時は全件）。
+              類似度データが未登録の作曲家（OST スクレイプで新規追加されたもの）を優先する。
 
 依存:
   pip install requests python-dotenv supabase
 """
 
+import argparse
 import os
 import time
 import requests
@@ -63,13 +67,22 @@ def get_composer_by_name(name: str, composers: list[dict]) -> dict | None:
     return None
 
 
-def run():
+def run(limit: int | None = None):
     composers = get_all_composers()
     if not composers:
         print("作曲家データがありません。先に import_steam_soundtracks.py を実行してください。")
         return
 
-    print(f"{len(composers)} 件の作曲家について類似度を取得します...")
+    # 類似度データ未登録の作曲家を優先してソート
+    existing_ids = {
+        row["composer_id_a"]
+        for row in (db.table("composer_similarities").select("composer_id_a").execute().data or [])
+    }
+    composers.sort(key=lambda c: c["id"] in existing_ids)
+    if limit:
+        composers = composers[:limit]
+
+    print(f"{len(composers)} 件の作曲家について類似度を取得します（未登録優先）...")
     inserted = 0
     skipped = 0
 
@@ -112,4 +125,10 @@ def run():
 
 
 if __name__ == "__main__":
-    run()
+    parser = argparse.ArgumentParser(
+        description="Last.fm から作曲家間類似度を取得して composer_similarities に保存"
+    )
+    parser.add_argument("--limit", type=int, default=None,
+                        help="処理する作曲家数の上限（デフォルト: 全件）")
+    args = parser.parse_args()
+    run(args.limit)

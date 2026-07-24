@@ -13,6 +13,8 @@
 | [03_feature_brainstorm.md](planning/03_feature_brainstorm.md) | 機能ブレスト・MVPスコープ確定版 | 完了 |
 | [04_system_direction.md](planning/04_system_direction.md) | システム方向性 統合提案（5エージェント分析） | 確定 |
 | [05_user_story_map.md](planning/05_user_story_map.md) | ユーザーストーリーマップ・開発フェーズ | 確定 |
+| [06_development_plan.md](planning/06_development_plan.md) | 開発計画・実装ログ（M1〜β・ベータ後アップデート） | 随時更新 |
+| [07_post_beta_roadmap.md](planning/07_post_beta_roadmap.md) | ベータ後ロードマップ・フェーズ計画 | 随時更新 |
 
 ## 企画の核
 
@@ -23,3 +25,6 @@
 | 日付 | 作業内容 |
 |------|---------|
 | 2026-07-18 | JTBD分析・ペルソナ定義・設計決定・機能ブレスト完了・システム方向性確定 |
+| 2026-07-21 | M1〜M4 完了・ベータリリース |
+| 2026-07-23 | Vercel Analytics・DBトリガー・バッチ品質改善 |
+| 2026-07-24 | YouTube games 移管・トラックリスト UI・schema.sql 一元管理・daily-import バグ修正・依存更新 |

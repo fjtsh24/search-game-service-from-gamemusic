@@ -5,9 +5,9 @@
 ## ディレクトリ構成
 
 ```
-├── web/         Next.js 15 + TypeScript（フロントエンド）
+├── web/         Next.js 16 + TypeScript（フロントエンド）
 ├── api/         Python + FastAPI（バックエンド）
-├── supabase/    DBスキーマ・マイグレーション
+├── supabase/    DBスキーマ（schema.sql で一元管理）
 ├── scripts/     データインポートスクリプト
 └── docs/        企画ドキュメント
 ```

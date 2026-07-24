@@ -65,9 +65,14 @@ def clear_cache(tagged_game_ids: list[str], tagged_tag_ids: list[str]) -> None:
 
     if not keys:
         return
-    url = f"{UPSTASH_REDIS_URL}/del/{'/'.join(keys)}"
+    # POST body で送信（キーが多いと GET URL が長すぎて失敗するため）
     try:
-        resp = http.get(url, headers=headers, timeout=5)
+        resp = http.post(
+            f"{UPSTASH_REDIS_URL}/",
+            headers=headers,
+            json=["del"] + keys,
+            timeout=5,
+        )
         print(f"キャッシュクリア: {resp.json().get('result', '?')} 件削除")
     except Exception as e:
         print(f"キャッシュクリア失敗（無視）: {e}")
@@ -284,7 +289,7 @@ def run(limit: int, overwrite: bool) -> None:
             for tid, conf in mapped
         ]
         db.table("game_tags").upsert(rows, on_conflict="game_id,tag_id").execute()
-        db.table("games").update({"is_discoverable": True}).eq("id", game["id"]).execute()
+        # is_discoverable は trg_discoverable_on_game_tags トリガーが自動更新するため不要
         tag_names = [
             next((n for n, d in mood_tag_index.items() if d["id"] == tid), tid)
             for tid, _ in mapped
