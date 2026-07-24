@@ -21,10 +21,6 @@ on:
         description: '処理件数の上限'
         required: false
         default: '100'
-      phase:
-        description: 'youtube ジョブのフェーズ (1=既存補完, 2=新規作成, all=両方)'
-        required: false
-        default: 'all'
 
 env:
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -38,7 +34,7 @@ env:
 jobs:
   # ── 毎日自動実行: 優先度順の拡充パイプライン ──────────────────────────────
   daily-enrichment:
-    name: 毎日データ拡充（タグ→説明文補完→YouTube→新規追加→OST取得）
+    name: 毎日データ拡充（タグ→説明文補完→YouTube→新規追加→OST取得→類似度更新）
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
@@ -60,7 +56,7 @@ jobs:
         run: python3 scripts/import_steam_soundtracks.py --backfill --limit 30
 
       - name: Step 3 — YouTube VideoID 既存補完（20件、locked スキップ）
-        run: python3 scripts/import_youtube_video_ids.py --limit 20 --phase 1
+        run: python3 scripts/import_youtube_video_ids.py --limit 20
 
       - name: Step 4 — Steam 新規ゲーム追加（5件）
         run: python3 scripts/import_steam_soundtracks.py --limit 5
@@ -72,15 +68,15 @@ jobs:
         timeout-minutes: 30
         run: python3 scripts/import_steam_ost_data.py --phase scrape --limit 10
 
-      - name: Step 7 — 動画報告済みトラックの確認（要管理者レビュー）
+      - name: Step 7 — 報告済み動画の確認（要管理者レビュー）
         run: |
           python3 - <<'EOF'
           import os
           from supabase import create_client
           db = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_ROLE_KEY"])
           rows = (
-              db.table("tracks")
-              .select("id, youtube_video_id, games(title)")
+              db.table("games")
+              .select("id, title, youtube_video_id")
               .eq("youtube_flagged", True)
               .execute()
               .data or []
@@ -90,11 +86,14 @@ jobs:
           else:
               print(f"⚠ 報告済み動画 {len(rows)} 件（管理者確認・手動対応が必要）:")
               for r in rows:
-                  title = (r.get("games") or {}).get("title", "?")
+                  title = r.get("title", "?")
                   vid = r.get("youtube_video_id", "?")
                   print(f"  - {title}: https://www.youtube.com/watch?v={vid}")
-              print("\n対応後は tracks.youtube_flagged = FALSE に更新してください。")
+              print("\n対応後は games.youtube_flagged = FALSE に更新してください。")
           EOF
+
+      - name: Step 8 — Last.fm 作曲家類似度更新（新規作曲家優先 30件）
+        run: python3 scripts/import_lastfm_similarities.py --limit 30
 
   # ── 手動トリガー: 個別ジョブ ──────────────────────────────────────────────
   youtube:
@@ -116,9 +115,8 @@ jobs:
       - name: Run YouTube import
         run: |
           LIMIT=${{ inputs.limit || '100' }}
-          PHASE=${{ inputs.phase || 'all' }}
-          echo "処理件数: ${LIMIT} / フェーズ: ${PHASE}"
-          python3 scripts/import_youtube_video_ids.py --limit "${LIMIT}" --phase "${PHASE}"
+          echo "処理件数: ${LIMIT}"
+          python3 scripts/import_youtube_video_ids.py --limit "${LIMIT}"
 
   steam_backfill:
     name: Steam 説明文バックフィル（既存ゲームの欠損説明文を補完）
@@ -200,4 +198,6 @@ jobs:
         run: pip install -r scripts/requirements.txt
 
       - name: Run Last.fm similarities import
-        run: python3 scripts/import_lastfm_similarities.py
+        run: |
+          LIMIT=${{ inputs.limit || '100' }}
+          python3 scripts/import_lastfm_similarities.py --limit "${LIMIT}"
