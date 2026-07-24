@@ -135,7 +135,7 @@ CREATE INDEX idx_games_steam_app_id       ON games (steam_app_id);
 CREATE INDEX idx_games_release_year       ON games (release_year);
 CREATE INDEX idx_composers_name           ON composers USING gin (to_tsvector('simple', name));
 CREATE INDEX idx_tracks_game_id           ON tracks (game_id);
-CREATE INDEX idx_track_composers_composer ON track_composers (composer_id);
+CREATE INDEX idx_track_composers_composer_id ON track_composers (composer_id);
 CREATE INDEX idx_game_tags_tag_id         ON game_tags (tag_id);
 CREATE INDEX idx_composer_sim_a_score     ON composer_similarities (composer_id_a, score DESC);
 CREATE INDEX idx_user_games_user_id       ON user_games (user_id);
