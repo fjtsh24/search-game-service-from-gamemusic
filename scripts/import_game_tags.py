@@ -3,10 +3,10 @@
 アルバムタグを集計して game_tags テーブルに保存する。
 
 検索順:
-  1. album.search でゲームタイトルに一致するアルバムを探し、最上位のタグを取得
-  2. それも失敗 → games.tags_locked = TRUE をセットしてスキップ（以後の日次バッチで再試行しない）
-
-MusicBrainz は精度が低いため廃止済み。
+  1. album.search("ゲーム名") / ("ゲーム名 ost") / ("ゲーム名 soundtrack") で一致するアルバムを探す
+  2. 見つからなければ、作曲家名を組み込んで再検索
+     ("ゲーム名 作曲家名") / ("ゲーム名 ost 作曲家名") を各作曲家で試す
+  3. それも失敗 → games.tags_locked = TRUE をセットしてスキップ（以後の日次バッチで再試行しない）
 
 使い方:
   python3 scripts/import_game_tags.py [--limit 200] [--overwrite]
@@ -93,23 +93,44 @@ KEYWORD_MAP: dict[str, list[str]] = {
     "intense":     ["intense", "aggressive", "energetic", "adrenaline", "action", "battle", "tension", "fast"],
     "folk":        ["folk", "world music", "ethnic", "traditional", "celtic", "tribal", "acoustic folk"],
     "metal":       ["metal", "heavy metal", "hard rock", "progressive rock", "power metal", "doom metal"],
-    "vocal":       ["vocal", "vocals", "singer", "singing", "choir", "choral", "a cappella"],
+    "vocal":        ["vocal", "vocals", "singer", "singing", "choir", "choral", "a cappella"],
+    "instrumental": ["instrumental", "instrumental music"],
 }
 
 MIN_TAG_COUNT = 1
 
+# アルバム名に含まれていれば「OSTと判断できる」キーワード
+_OST_NAME_KEYWORDS = (
+    "soundtrack", "ost", "original score", "original soundtrack",
+    "game music", "music from", "video game", "bgm",
+)
+
 
 # ── Last.fm API ───────────────────────────────────────────────────────────────
 
-def _lastfm_album_search(query: str, game_title: str) -> tuple[str, str] | None:
-    """album.search でタイトル一致するアルバムを返す。"""
+def _lastfm_album_search(
+    query: str,
+    game_title: str,
+    known_composers: list[str] | None = None,
+) -> tuple[str, str] | None:
+    """album.search でタイトル一致するアルバムを返す。
+
+    誤マッチ対策として、タイトル一致したアルバムに対して以下のいずれかを要求する:
+      1. クエリ自体に "ost" / "soundtrack" が含まれる（絞り込み済み）
+      2. アルバム名に _OST_NAME_KEYWORDS のいずれかが含まれる
+      3. アルバムのアーティスト名が known_composers のいずれかと部分一致する
+    いずれも満たさない場合、非ゲームアルバムへの誤マッチとみなしてスキップする。
+    """
+    query_has_ost = any(kw in query.lower() for kw in ("ost", "soundtrack"))
+    composers_lower = [c.lower() for c in (known_composers or [])]
+
     time.sleep(LFM_WAIT)
     resp = http.get(LASTFM_BASE, params={
         "method": "album.search",
         "album": query,
         "api_key": LASTFM_API_KEY,
         "format": "json",
-        "limit": 5,
+        "limit": 15,
     }, timeout=10)
     if not resp.ok:
         return None
@@ -121,20 +142,80 @@ def _lastfm_album_search(query: str, game_title: str) -> tuple[str, str] | None:
     for album in albums:
         name = album.get("name", "")
         artist = album.get("artist", "")
-        if title_lower in name.lower() or name.lower() in title_lower:
+        if not (title_lower in name.lower() or name.lower() in title_lower):
+            continue
+
+        # 条件1: クエリに ost/soundtrack が含まれる → 採用
+        if query_has_ost:
             return name, artist
+
+        # 条件2: アルバム名に OST キーワードが含まれる → 採用
+        if any(kw in name.lower() for kw in _OST_NAME_KEYWORDS):
+            return name, artist
+
+        # 条件3: アーティスト名が既知の作曲家と部分一致 → 採用
+        artist_lower = artist.lower()
+        if composers_lower and any(
+            c in artist_lower or artist_lower in c for c in composers_lower
+        ):
+            return name, artist
+
+        # いずれも満たさない → 誤マッチの可能性があるためスキップ
+        print(f"  [誤マッチ候補スキップ] '{name}' / '{artist}' — OST 未確認・作曲家不一致")
     return None
 
 
-def search_album(game_title: str) -> tuple[str, str] | None:
+def search_album(game_title: str, known_composers: list[str] | None = None) -> tuple[str, str] | None:
     """album.search でゲームタイトルに一致するアルバムを探す。
-    "ゲーム名 ost" → "ゲーム名" の順で試す。
+    "ゲーム名" → "ゲーム名 ost" → "ゲーム名 soundtrack" の順で試す。
+    known_composers は誤マッチ判定に使用する。
     Returns (album_name, artist_name) or None。
     """
-    for query in [game_title, f"{game_title} ost"]:
-        result = _lastfm_album_search(query, game_title)
+    for query in [game_title, f"{game_title} ost", f"{game_title} soundtrack"]:
+        result = _lastfm_album_search(query, game_title, known_composers)
         if result:
             return result
+    return None
+
+
+def get_game_composers(game_id: str) -> list[str]:
+    """ゲームに紐付く作曲家名リストを返す（重複除去済み）。"""
+    track_rows = (
+        db.table("tracks").select("id").eq("game_id", game_id).execute().data or []
+    )
+    if not track_rows:
+        return []
+    track_ids = [r["id"] for r in track_rows]
+    tc_rows = (
+        db.table("track_composers")
+        .select("composer_id")
+        .in_("track_id", track_ids)
+        .execute()
+        .data or []
+    )
+    if not tc_rows:
+        return []
+    composer_ids = list({r["composer_id"] for r in tc_rows})
+    c_rows = (
+        db.table("composers")
+        .select("name")
+        .in_("id", composer_ids)
+        .execute()
+        .data or []
+    )
+    return [r["name"] for r in c_rows]
+
+
+def search_album_with_composers(game_title: str, composer_names: list[str]) -> tuple[str, str] | None:
+    """作曲家名を検索クエリに加えて album.search を再試行する。
+    "ゲーム名 作曲家名" → "ゲーム名 ost 作曲家名" の順で各作曲家を試す。
+    Returns (album_name, artist_name) or None。
+    """
+    for composer in composer_names:
+        for query in [f"{game_title} {composer}", f"{game_title} ost {composer}"]:
+            result = _lastfm_album_search(query, game_title, composer_names)
+            if result:
+                return result
     return None
 
 
@@ -191,6 +272,26 @@ def map_to_mood_tags(tag_list: list[dict], mood_tag_index: dict[str, dict]) -> l
     return list(matched.items())
 
 
+def get_unmatched_tags(tag_list: list[dict]) -> list[str]:
+    """KEYWORD_MAP にマッチしなかった Last.fm タグ名を返す（count >= MIN_TAG_COUNT のもの）。
+    CI ログで「どのタグが取りこぼされているか」を把握するために使う。
+    """
+    result = []
+    for t in tag_list:
+        name_lower = t.get("name", "").lower().strip()
+        if not name_lower or name_lower in ("all",):
+            continue
+        if int(t.get("count", 1)) < MIN_TAG_COUNT:
+            continue
+        matched_any = any(
+            any(kw in name_lower or name_lower in kw for kw in keywords)
+            for keywords in KEYWORD_MAP.values()
+        )
+        if not matched_any:
+            result.append(t.get("name", name_lower))
+    return result
+
+
 # ── DB 操作 ───────────────────────────────────────────────────────────────────
 
 def get_games_without_tags(limit: int, overwrite: bool) -> list[dict]:
@@ -245,15 +346,24 @@ def run(limit: int, overwrite: bool) -> None:
     print(f"{len(games)} 件のゲームにタグを付与します...\n")
     total_tagged = 0
     total_locked = 0
+    total_composer_fallback = 0
     tagged_game_ids: list[str] = []
     tagged_tag_ids: list[str] = []
     locked_titles: list[str] = []
+    global_unmatched: Counter = Counter()
 
     for i, game in enumerate(games, 1):
         title = game["title"]
         print(f"[{i}/{len(games)}] {title}")
 
-        album_match = search_album(title)
+        composers = get_game_composers(game["id"])
+        album_match = search_album(title, composers)
+        if not album_match:
+            if composers:
+                print(f"  作曲家フォールバック: {', '.join(composers)}")
+                album_match = search_album_with_composers(title, composers)
+                if album_match:
+                    total_composer_fallback += 1
         if not album_match:
             print("  → Last.fm アルバム見つからず → locked")
             lock_game_tags(game["id"])
@@ -275,9 +385,14 @@ def run(limit: int, overwrite: bool) -> None:
         print(f"  アルバム: '{album_name}' / '{artist_name}'")
 
         mapped = map_to_mood_tags(tags, mood_tag_index)
+        unmatched = get_unmatched_tags(tags)
+        if unmatched:
+            global_unmatched.update(unmatched)
+
         if not mapped:
-            top = [t["name"] for t in tags[:5]]
-            print(f"  → ムードタグにマッチせず（タグ例: {top}）→ locked")
+            print(f"  → ムードタグにマッチせず → locked")
+            if unmatched:
+                print(f"     未マッチタグ: {unmatched[:10]}")
             lock_game_tags(game["id"])
             locked_titles.append(title)
             total_locked += 1
@@ -300,11 +415,16 @@ def run(limit: int, overwrite: bool) -> None:
         total_tagged += 1
         print()
 
-    print(f"完了 — タグ付与: {total_tagged} 件, locked 追加: {total_locked} 件")
+    print(f"完了 — タグ付与: {total_tagged} 件（作曲家フォールバック: {total_composer_fallback} 件）, locked 追加: {total_locked} 件")
     if locked_titles:
         print("  locked ゲーム（再試行するには tags_locked=FALSE に更新）:")
         for t in locked_titles:
             print(f"    - {t}")
+
+    if global_unmatched:
+        print("\n  ── 未マッチ Last.fm タグ Top 15（KEYWORD_MAP 拡充の参考に）──")
+        for tag_name, count in global_unmatched.most_common(15):
+            print(f"    {count:3d}回  {tag_name}")
 
     if tagged_game_ids:
         clear_cache(tagged_game_ids, list(set(tagged_tag_ids)))

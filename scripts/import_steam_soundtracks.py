@@ -421,6 +421,11 @@ def run(limit: int, min_score: int) -> None:
             print("  DB 登録失敗、スキップ")
             continue
 
+        # fullgame 解決済みの場合は soundtrack_appid を即時保存（discover フェーズの再検索を不要にする）
+        if soundtrack_appid != game_appid:
+            db.table("games").update({"steam_ost_appid": soundtrack_appid}).eq("id", game_id).execute()
+            print(f"  steam_ost_appid={soundtrack_appid} を保存")
+
         existing_app_ids.add(game_appid)
         imported += 1
         print()
