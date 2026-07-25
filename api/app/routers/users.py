@@ -13,6 +13,26 @@ from app.session import require_session
 router = APIRouter()
 
 
+def _attach_reason_tags(
+    game: dict,
+    reason_tag_ids: set[str],
+    tag_weights: dict[str, float],
+) -> None:
+    """game dict に reason_tags フィールドを in-place で付与する。
+
+    reason_tag_ids: そのゲームのスコアに寄与した mood_tag の id 集合（set のまま渡す）。
+                   JSON シリアライズされるのは最終的な list である reason_tags のみ。
+    tie-breaker: 同スコアのタグは id 昇順（表示順の安定性を保証）。
+    """
+    reason_tags = [
+        gt["mood_tags"]
+        for gt in (game.get("game_tags") or [])
+        if gt["mood_tags"]["id"] in reason_tag_ids
+    ]
+    reason_tags.sort(key=lambda t: (-tag_weights.get(t["id"], 0), t["id"]))
+    game["reason_tags"] = reason_tags[:2]
+
+
 class RatingRequest(BaseModel):
     rating: int  # 1-5
 
@@ -202,15 +222,7 @@ async def get_feed(limit: int = Query(default=20, le=100), session: dict = Depen
     order = {gid: i for i, gid in enumerate(top_ids)}
     result = []
     for g in sorted(games.data, key=lambda g: order.get(g["id"], 999)):
-        reason_tag_ids = game_reason_tag_ids.get(g["id"], set())
-        reason_tags = [
-            gt["mood_tags"]
-            for gt in (g.get("game_tags") or [])
-            if gt["mood_tags"]["id"] in reason_tag_ids
-        ]
-        # スコアの高いタグ順に最大2件
-        reason_tags.sort(key=lambda t: -tag_weights.get(t["id"], 0))
-        g["reason_tags"] = reason_tags[:2]
+        _attach_reason_tags(g, game_reason_tag_ids.get(g["id"], set()), tag_weights)
         result.append(g)
 
     await cache.set(cache_key, result, ex=600)

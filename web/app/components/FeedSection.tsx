@@ -32,7 +32,7 @@ export default function FeedSection({ fallbackGames }: Props) {
                 <GameCard game={game} />
                 {game.reason_tags && game.reason_tags.length > 0 && (
                   <p className="px-1 text-xs text-white/30">
-                    {game.reason_tags.map((t) => t.name_ja ?? t.name).join(" · ")} が好きな人に
+                    {game.reason_tags.map((t) => t.name_ja ?? t.name).join("・")}が好きな人に
                   </p>
                 )}
               </div>
