@@ -20,14 +20,9 @@ export default function AuthButton() {
     return (
       <a
         href={`${API_URL}/auth/steam`}
-        className="shrink-0 flex flex-col items-center rounded-full bg-zinc-800 px-4 py-1.5 hover:bg-zinc-700 group transition-colors"
+        className="shrink-0 rounded-full bg-zinc-800 px-4 py-1.5 text-sm font-medium text-white/70 hover:bg-zinc-700 hover:text-white transition-colors"
       >
-        <span className="text-sm font-medium text-white/70 group-hover:text-white transition-colors">
-          Steam でログイン
-        </span>
-        <span className="text-[10px] text-white/30 group-hover:text-white/50 transition-colors">
-          パスワード不要 · Steam 公式認証
-        </span>
+        Steam でログイン
       </a>
     );
   }
