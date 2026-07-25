@@ -2,7 +2,7 @@
 
 > 策定: 2026-07-22  
 > ベータリリース（2026-07-21）完了後の開発・拡張計画。  
-> 最終更新: 2026-07-25（PR #73 / #74 リリース後）
+> 最終更新: 2026-07-25（PR #74〜#78 リリース後）
 
 ---
 
@@ -21,13 +21,14 @@
 | YouTube 動画（トラック別） | ✅ 実装済み（PR #73）。ゲーム名＋曲名で厳格マッチ、汎用曲名スキップ |
 | is_discoverable 自動更新 | ✅ DB トリガー実装済み（game_tags / youtube_video_id 両対応） |
 | フィード推薦理由表示 | ✅ reason_tags フィールド追加・カード下にタグ表示（PR #68） |
-| Steam ログイン UX | ✅ 実装済み（PR #73）。2行ボタン・CTA バナー・StarRating ヒント |
+| Steam ログイン UX | ✅ 実装済み（PR #73/#76）。未ログイン CTA バナー・StarRating ヒント・ボタン1行化 |
 | トラックリスト | ⚠️ Steam OST スクレイプ稼働中（~40% のゲームでデータ取得済み） |
 | トラックリスト UI | ✅ YouTube プレーヤー横にリスト表示（PR #40） |
 | 作曲家類似度更新 | ✅ 日次パイプライン Step 8 に組み込み済み（PR #60） |
 | スキーマ管理 | ✅ schema.sql 一元管理（migrations 廃止、実 DB と照合済み） |
 | 依存パッケージ | ✅ 主要パッケージ最新版に更新済み（2026-07-24） |
 | Secret Scanning / Dependabot | ✅ 有効化済み（#19 Closed） |
+| i18n 静的チェック | ✅ 実装済み（PR #77）。新規 CJK ハードコードを CI で検出（既知違反 9 件は issue #79） |
 | ユーザー数 | 少数（趣味PJT規模） |
 
 ## 2026-07-23 リリース内容
@@ -210,27 +211,29 @@ Phase 1-B でトラックリストが揃ってから実装。ゲーム詳細ペ�
 
 ---
 
-### 3-C: 多言語対応（i18n）
+### 3-C: 多言語対応（i18n）（→ issue #79）
 
 現状は日本語UIのみ。APIはすでに `Accept-Language` 対応済みなのでフロント側の実装が主な作業。
 
-**静的チェック（実装済み）**:
-- [x] `scripts/check-i18n.mjs` — JSX 属性・confirm() 等の CJK ハードコード文字列を検出（PR #77）
-  - 対象: `aria-label` / `placeholder` / `title` / `alt` 属性、`confirm()` / `setError()` 等
-  - ラチェット方式: `web/i18n-violations.json` に既知違反を記録し、新規追加のみ CI で防ぐ
-  - 現在の既知違反: 9件（i18n 対応を進めるにつれて削減していく）
+> ⚠️ **注意**: 下記の静的チェック（PR #77）は「新規追加を防ぐ番人」であり、i18n の実装ではない。
+> 実際の多言語対応は issue #79 のタスクをすべて完了して初めて達成される。
 
-**実装タスク**:
+**静的チェック（実装済み、PR #77）**:
+- [x] `scripts/check-i18n.mjs` — JSX 属性・confirm() 等の CJK ハードコード文字列を CI で検出
+  - ラチェット方式: `web/i18n-violations.json` に既知違反 9 件を記録し、新規追加のみ防ぐ
+  - 対応を進めるにつれてスナップショットから削除し、最終的に 0 件を目指す
+
+**未実施タスク（issue #79）**:
 - [ ] `next-intl` 導入・`/ja` `/en` ルート構成
-- [ ] UIテキストの翻訳ファイル作成（`messages/ja.json` `messages/en.json`）
+- [ ] 翻訳ファイル作成（`messages/ja.json` / `messages/en.json`）と全テキストの `t("key")` 置き換え
 - [ ] 言語スイッチャーUI
+- [ ] `<html lang="ja">` を動的 locale へ変更（`layout.tsx:18`）
+- [ ] `metadata` を `generateMetadata()` に移行
 
-**i18n 対応時の注意点**（通常の文字列置換では対応できない箇所）:
-- `FeedSection.tsx` の `` `${tag.name}が好きな人に` `` — 日本語語順がハードコード。英語では語順が逆になるためテンプレート自体を言語別に分ける必要がある
-- `YouTubePlayer.tsx` の `totalDurationLabel()` — `分` / `時間` が関数ロジック内に埋め込み。`Intl.DurationFormat` への置き換えが必要
-- 数詞サフィックス（`件` / `年` / `曲`）— `${n}件` 等のテンプレートリテラル内 CJK はスクリプト検出対象外。i18n ライブラリの複数形ルールで対応
-- `<html lang="ja">` のハードコード（`layout.tsx:18`）— next-intl 導入時に動的 locale へ変更
-- `metadata.title/description` の静的エクスポート（`layout.tsx`）— `generateMetadata()` への移行が必要
+**単純な文字列置換では対応できない箇所**（設計が必要):
+- `FeedSection.tsx` `` `${tag.name}が好きな人に` `` — 英語では語順が逆。言語別テンプレートに分割が必要
+- `YouTubePlayer.tsx` `totalDurationLabel()` — `分` / `時間` が関数ロジック内に埋め込み。`Intl.DurationFormat` に置き換える
+- 数詞サフィックス `${n}件` / `${n}年` / `${n}曲` — テンプレートリテラル内のため静的チェック対象外。i18n ライブラリの plural ルールで対応
 
 ---
 
@@ -301,3 +304,4 @@ Phase 3-A / 3-B / 3-C は独立して進められる
 | #34 | 完了 | lastfm_similarities.py に --limit 追加 | ✅ Closed（PR#60） |
 | #62 | UX | Steam ログイン価値・安全性説明の改善 | ✅ Closed（PR #73） |
 | #63 | 完了 | steam_ost_locked フラグ実装 | ✅ Closed（PR#65） |
+| #79 | 3-C | 多言語対応（i18n）next-intl 導入・翻訳ファイル作成 | 🔵 Open（静的チェックのみ実施済み、本実装は未着手） |
