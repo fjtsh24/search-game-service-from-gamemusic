@@ -472,3 +472,39 @@ git 履歴がマイグレーション履歴を兼ねる。psql で実 DB と照�
 - **pip (scripts)**: requests 2.32.3→2.34.2、python-dotenv 1.0.1→1.2.2、supabase 2.7.4→2.31.0、beautifulsoup4 4.12.3→4.15.0
 - **pip (api/dev)**: pytest 8.3.3→9.0.3、pytest-asyncio 0.24.0→1.4.0（pytest 9 対応版へメジャーアップ）
 - TypeScript 7 / ESLint 10 はエコシステム未対応のため見送り（`typescript-eslint` 待ち）
+
+---
+
+## アップデート（2026-07-25）
+
+### ゲームタグ付与の精度改善（`fix/daily-import-bugs` ブランチ）
+
+GitHub Actions のログ分析から、`import_game_tags.py`（日次 Step 1）が実質機能していなかった問題を修正。
+
+#### 問題の根本原因
+- Last.fm `album.search` の取得件数が `limit=5` に制限されていた（OST が6件目以降にある場合は完全スルー）
+- 検索クエリが `"ゲーム名"` と `"ゲーム名 ost"` の2パターンのみ（`"soundtrack"` 表記を見落とし）
+- album.search 失敗時の代替検索なし
+- 誤マッチ対策なし（「AQUARIUM」→ Aqua のポップアルバムにマッチしてしまう等）
+- `instrumental`（ボーカルなし楽曲）が mood_tags に存在しなかった
+
+#### 修正内容
+
+| 対象 | 種別 | 内容 |
+|---|---|---|
+| `import_game_tags.py` | バグ修正 | `album.search` の取得件数を 5 → 15 件に拡大 |
+| `import_game_tags.py` | 改善 | 検索クエリに `"{title} soundtrack"` を追加（従来は `"{title} ost"` のみ） |
+| `import_game_tags.py` | 改善 | album.search 失敗時に作曲家名を検索クエリに組み込んで再検索するフォールバックを追加。`composers` テーブルの既存データを活用し、`"{title} {composer}"` → `"{title} ost {composer}"` の順で試す（`artist.getTopTags` は採用しない — 作曲家の非ゲーム活動タグが混入するため） |
+| `import_game_tags.py` | 改善 | 誤マッチ対策: タイトル一致したアルバムに対し「OST キーワードがアルバム名に含まれる」または「アーティスト名が既知作曲家と一致する」のいずれかを要求。どちらも満たさない場合はスキップしてログ出力 |
+| `import_game_tags.py` | 改善 | アルバムが見つかったが KEYWORD_MAP にマッチしなかったタグを per-game でログ出力、全体 Top 15 をサマリーに表示（CI ログでの精度モニタリング用） |
+| `mood_tags` / `schema.sql` | 追加 | `instrumental`（インストゥルメンタル）mood_tag を追加。DB に直接 INSERT 済み |
+
+#### OST データ取得の修正
+
+| 対象 | 種別 | 内容 |
+|---|---|---|
+| `import_steam_soundtracks.py` | バグ修正 | ゲーム追加時に `soundtrack_appid != game_appid`（fullgame 解決済み）の場合、`steam_ost_appid` を即時保存するよう修正。従来は知っているデータを捨てて、discover フェーズが毎日再検索していた |
+| `import_steam_ost_data.py`（discover） | バグ修正 | クエリに `.order("created_at", desc=False)` を追加。order 未指定だと UUID 挿入順の先頭50件が毎日繰り返し試行され、後続ゲームが発見フェーズに入れなかった |
+
+#### 残課題（issue 化済み）
+- `steam_ost_locked` フラグ: 永久に OST が見つからないゲームを discover フェーズの対象から除外する仕組みが未実装。現状は order 追加でローテーションは改善されたが、失敗済みゲームをスキップするフラグが必要（`tags_locked` / `youtube_locked` と同パターン）

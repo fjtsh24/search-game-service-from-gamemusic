@@ -246,6 +246,7 @@ INSERT INTO mood_tags (name, name_ja) VALUES
   ('intense',     '激しい・テンション高'),
   ('folk',        'フォーク・民族音楽'),
   ('metal',       'メタル・ロック'),
-  ('vocal',       'ボーカル曲');
+  ('vocal',        'ボーカル曲'),
+  ('instrumental', 'インストゥルメンタル');
 
 INSERT INTO system_settings (key, value) VALUES ('steam_scan_offset', '0');
