@@ -28,6 +28,7 @@ export type Game = {
   release_year: number | null;
   cover_image_url: string | null;
   game_tags?: { mood_tags: Tag }[];
+  reason_tags?: Tag[];
 };
 
 export type Tag = {

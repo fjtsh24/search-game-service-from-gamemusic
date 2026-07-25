@@ -13,6 +13,26 @@ from app.session import require_session
 router = APIRouter()
 
 
+def _attach_reason_tags(
+    game: dict,
+    reason_tag_ids: set[str],
+    tag_weights: dict[str, float],
+) -> None:
+    """game dict に reason_tags フィールドを in-place で付与する。
+
+    reason_tag_ids: そのゲームのスコアに寄与した mood_tag の id 集合（set のまま渡す）。
+                   JSON シリアライズされるのは最終的な list である reason_tags のみ。
+    tie-breaker: 同スコアのタグは id 昇順（表示順の安定性を保証）。
+    """
+    reason_tags = [
+        gt["mood_tags"]
+        for gt in (game.get("game_tags") or [])
+        if gt["mood_tags"]["id"] in reason_tag_ids
+    ]
+    reason_tags.sort(key=lambda t: (-tag_weights.get(t["id"], 0), t["id"]))
+    game["reason_tags"] = reason_tags[:2]
+
+
 class RatingRequest(BaseModel):
     rating: int  # 1-5
 
@@ -169,6 +189,7 @@ async def get_feed(limit: int = Query(default=20, le=100), session: dict = Depen
         tag_weights[row["tag_id"]] = tag_weights.get(row["tag_id"], 0) + w
 
     scores: dict[str, float] = {}
+    game_reason_tag_ids: dict[str, set[str]] = {}
     if tag_weights:
         top_tags = sorted(tag_weights, key=lambda t: -tag_weights[t])[:10]
         candidates = (
@@ -180,6 +201,7 @@ async def get_feed(limit: int = Query(default=20, le=100), session: dict = Depen
         )
         for row in (candidates.data or []):
             scores[row["game_id"]] = scores.get(row["game_id"], 0) + tag_weights.get(row["tag_id"], 0)
+            game_reason_tag_ids.setdefault(row["game_id"], set()).add(row["tag_id"])
 
     # 作曲家類似度ブースト（composer_similarities にデータがあれば機能する）
     composer_boost = await composer_boost_for_games(db, rated_ids, rating_map)
@@ -198,7 +220,10 @@ async def get_feed(limit: int = Query(default=20, le=100), session: dict = Depen
         .execute()
     )
     order = {gid: i for i, gid in enumerate(top_ids)}
-    result = sorted(games.data, key=lambda g: order.get(g["id"], 999))
+    result = []
+    for g in sorted(games.data, key=lambda g: order.get(g["id"], 999)):
+        _attach_reason_tags(g, game_reason_tag_ids.get(g["id"], set()), tag_weights)
+        result.append(g)
 
     await cache.set(cache_key, result, ex=600)
     return result

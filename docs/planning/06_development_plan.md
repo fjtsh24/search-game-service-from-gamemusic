@@ -166,7 +166,7 @@ M4完了時点でベータリリース。Path A・Path B の両方が外部か�
 - [x] ホームページ: 常にランダムゲーム一覧を表示（全件からランダム offset で取得）
 - [x] ログイン＋ライブラリあり時: 「あなたへのおすすめ」をランダム一覧の上に追加表示（`FeedSection.tsx`）
 - [x] 未ログイン時: タグクラウド + ランダムゲーム一覧
-- [ ] フィードカードのデザイン改善（類似理由の表示など）— 現状は `GameCard` を流用
+- [x] フィードカードに推薦理由タグを表示（`reason_tags` フィールド追加）
 
 ---
 
@@ -507,4 +507,23 @@ GitHub Actions のログ分析から、`import_game_tags.py`（日次 Step 1）�
 | `import_steam_ost_data.py`（discover） | バグ修正 | クエリに `.order("created_at", desc=False)` を追加。order 未指定だと UUID 挿入順の先頭50件が毎日繰り返し試行され、後続ゲームが発見フェーズに入れなかった |
 
 #### 残課題
-- （解消済み）`steam_ost_locked` フラグ → 2026-07-25 実装（`fix/steam-ost-locked` ブランチ）
+- ✅ `steam_ost_locked` フラグ — PR #65 でマージ済み
+- ✅ KEYWORD_MAP 拡充（rock/trance/new age/country/post-rock 等）— PR #66 でマージ済み
+- 次回日次バッチの「未マッチ Top 15」ログで追加漏れを確認予定
+
+---
+
+## アップデート（2026-07-25 続き）
+
+### フィードカードに推薦理由を表示（M4-2 完了）
+
+`GET /users/me/feed` レスポンスに `reason_tags` を追加し、
+「あなたへのおすすめ」セクションで各ゲームカードの下に理由を表示。
+
+| 対象 | 変更内容 |
+|---|---|
+| `api/app/routers/users.py` | スコアリング時に `game_reason_tag_ids` を追跡し、レスポンスに `reason_tags`（最大2件、スコア高順）を付与 |
+| `web/app/lib/api.ts` | `Game` 型に `reason_tags?: Tag[]` を追加 |
+| `web/app/components/FeedSection.tsx` | フィードカードの下に「エレクトロニック · ダーク が好きな人に」形式で表示 |
+
+M4-2 チェックボックスを完了に更新:
