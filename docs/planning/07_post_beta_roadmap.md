@@ -214,10 +214,23 @@ Phase 1-B でトラックリストが揃ってから実装。ゲーム詳細ペ�
 
 現状は日本語UIのみ。APIはすでに `Accept-Language` 対応済みなのでフロント側の実装が主な作業。
 
+**静的チェック（実装済み）**:
+- [x] `scripts/check-i18n.mjs` — JSX 属性・confirm() 等の CJK ハードコード文字列を検出（PR #77）
+  - 対象: `aria-label` / `placeholder` / `title` / `alt` 属性、`confirm()` / `setError()` 等
+  - ラチェット方式: `web/i18n-violations.json` に既知違反を記録し、新規追加のみ CI で防ぐ
+  - 現在の既知違反: 9件（i18n 対応を進めるにつれて削減していく）
+
 **実装タスク**:
 - [ ] `next-intl` 導入・`/ja` `/en` ルート構成
 - [ ] UIテキストの翻訳ファイル作成（`messages/ja.json` `messages/en.json`）
 - [ ] 言語スイッチャーUI
+
+**i18n 対応時の注意点**（通常の文字列置換では対応できない箇所）:
+- `FeedSection.tsx` の `` `${tag.name}が好きな人に` `` — 日本語語順がハードコード。英語では語順が逆になるためテンプレート自体を言語別に分ける必要がある
+- `YouTubePlayer.tsx` の `totalDurationLabel()` — `分` / `時間` が関数ロジック内に埋め込み。`Intl.DurationFormat` への置き換えが必要
+- 数詞サフィックス（`件` / `年` / `曲`）— `${n}件` 等のテンプレートリテラル内 CJK はスクリプト検出対象外。i18n ライブラリの複数形ルールで対応
+- `<html lang="ja">` のハードコード（`layout.tsx:18`）— next-intl 導入時に動的 locale へ変更
+- `metadata.title/description` の静的エクスポート（`layout.tsx`）— `generateMetadata()` への移行が必要
 
 ---
 

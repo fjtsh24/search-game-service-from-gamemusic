@@ -81,6 +81,9 @@ jobs:
         env:
           NEXT_PUBLIC_API_URL: http://localhost:8000
 
+      - name: i18n ハードコード CJK チェック
+        run: node ../scripts/check-i18n.mjs
+
   # ── Fly.io デプロイ（main ブランチへの push 時のみ）──────────────────────────
   deploy-api:
     name: Deploy API to Fly.io
