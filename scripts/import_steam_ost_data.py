@@ -135,6 +135,7 @@ def run_discover(limit: int) -> None:
         .select("id, title, steam_app_id")
         .is_("steam_ost_appid", "null")
         .not_.is_("steam_app_id", "null")
+        .order("created_at", desc=False)
         .limit(limit)
         .execute()
         .data or []
