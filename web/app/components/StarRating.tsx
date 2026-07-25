@@ -49,7 +49,7 @@ export default function StarRating({ gameId, initialRating }: Props) {
           </button>
         ))}
       </div>
-      {loginRequired && (
+      {loginRequired ? (
         <p className="text-xs text-white/50">
           <a
             href={`${API_URL}/auth/steam`}
@@ -59,7 +59,9 @@ export default function StarRating({ gameId, initialRating }: Props) {
           </a>
           すると評価できます
         </p>
-      )}
+      ) : rating === 0 ? (
+        <p className="text-xs text-white/25">評価するほどおすすめ精度が上がります</p>
+      ) : null}
     </div>
   );
 }
