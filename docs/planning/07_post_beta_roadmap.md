@@ -1,7 +1,8 @@
 # 07 ベータ後ロードマップ
 
 > 策定: 2026-07-22  
-> ベータリリース（2026-07-21）完了後の開発・拡張計画。
+> ベータリリース（2026-07-21）完了後の開発・拡張計画。  
+> 最終更新: 2026-07-25（PR #73 / #74 リリース後）
 
 ---
 
@@ -10,20 +11,23 @@
 | 項目 | 状態 |
 |---|---|
 | M1〜M4 + ベータリリース | ✅ 完了 |
-| 日次バッチ（GitHub Actions） | ✅ 稼働中（JST 05:18、Step 1b まで拡充・計9ステップ） |
+| 日次バッチ（GitHub Actions） | ✅ 稼働中（JST 05:18、Step 3b まで拡充・計10ステップ） |
 | 登録ゲーム数 | ~200件以上（毎日~7件追加中） |
 | Last.fm タグ付与 | ⚠️ カバレッジ改善中（アルバム検索拡張・KEYWORD_MAP 拡充済み） |
 | 説明文タグ付与 | ✅ 実装済み（PR #71）。tags_locked ゲームを対象に日次 100 件処理 |
 | タグ申告システム | ✅ 実装済み（PR #71）。game_tag_flags テーブル＋日次ログ＋UI フラグボタン |
 | steam_ost_locked フラグ | ✅ 実装済み（PR #65）。discover 失敗ゲームをスキップする仕組み完備 |
-| YouTube 動画 | ✅ `games.youtube_video_id` に移管済み |
+| YouTube 動画（ゲーム OST） | ✅ `games.youtube_video_id` に移管済み |
+| YouTube 動画（トラック別） | ✅ 実装済み（PR #73）。ゲーム名＋曲名で厳格マッチ、汎用曲名スキップ |
 | is_discoverable 自動更新 | ✅ DB トリガー実装済み（game_tags / youtube_video_id 両対応） |
 | フィード推薦理由表示 | ✅ reason_tags フィールド追加・カード下にタグ表示（PR #68） |
+| Steam ログイン UX | ✅ 実装済み（PR #73）。2行ボタン・CTA バナー・StarRating ヒント |
 | トラックリスト | ⚠️ Steam OST スクレイプ稼働中（~40% のゲームでデータ取得済み） |
 | トラックリスト UI | ✅ YouTube プレーヤー横にリスト表示（PR #40） |
 | 作曲家類似度更新 | ✅ 日次パイプライン Step 8 に組み込み済み（PR #60） |
 | スキーマ管理 | ✅ schema.sql 一元管理（migrations 廃止、実 DB と照合済み） |
 | 依存パッケージ | ✅ 主要パッケージ最新版に更新済み（2026-07-24） |
+| Secret Scanning / Dependabot | ✅ 有効化済み（#19 Closed） |
 | ユーザー数 | 少数（趣味PJT規模） |
 
 ## 2026-07-23 リリース内容
@@ -61,6 +65,8 @@
 | ✅ フィード推薦理由タグ表示 | `reason_tags`（寄与タグ上位2件）をフィードカード下に表示。ユニットテスト7件追加 | PR#68 |
 | ✅ 説明文タグ付与 | `import_description_tags.py` 新規作成。保守的 2 段階マッチングで music-explicit フレーズのみ抽出 | PR#71 |
 | ✅ タグ申告システム | `game_tag_flags` テーブル・`POST /games/{id}/flag-tag` API・ゲーム詳細 UI フラグボタン | PR#71 |
+| ✅ Steam ログイン UX 強化 | ログインボタン 2 行化「パスワード不要 · Steam 公式認証」・未ログイン向け CTA バナー・StarRating ヒント | PR#73 / #62 |
+| ✅ トラック別 YouTube VideoID | `--mode tracks` でゲーム名＋曲名の厳格マッチ。日次 Step 3b（10件/日）に追加 | PR#73 |
 
 ---
 
@@ -70,7 +76,7 @@
 
 | 内容 | 方法 | Issue |
 |---|---|---|
-| GitHub Secret Scanning 有効化 | Settings → Security → Secret scanning → Enable | #19 |
+| ~~GitHub Secret Scanning 有効化~~ | ✅ 有効化済み | #19 Closed |
 | UptimeRobot 設定（死活監視） | https://uptimerobot.com で `/health` を登録 | #20 |
 
 ---
@@ -120,7 +126,7 @@ Last.fm album.getInfo
 
 **実装タスク**:
 - [ ] `import_track_listings.py` 新規作成（Last.fm album.getInfo、composer 登録含む）
-- [ ] YouTube VideoID バッチを「トラック名＋ゲーム名」検索に対応
+- [x] YouTube VideoID バッチを「トラック名＋ゲーム名」検索に対応（PR #73 完了）
 - [ ] ゲーム詳細ページにトラックリストセクション追加
 - [ ] composer データ充実後に `import_lastfm_similarities.py` を再実行
 
@@ -271,14 +277,14 @@ Phase 3-A / 3-B / 3-C は独立して進められる
 | Issue | Phase | 内容 | 状態 |
 |---|---|---|---|
 | #14 | 1-C | タグ付与ソース拡張（Bandcamp等） | ⚠️ 一部完了（説明文抽出 PR#71 完了、Bandcamp は利用規約確認待ち） |
-| #15 | 1-B | トラックリスト取得・保存・表示 | ⚠️ 進行中（Steam OST スクレイプ実装済み・UI追加済み。トラック別VideoID未実装） |
+| #15 | 1-B | トラックリスト取得・保存・表示 | ⚠️ 進行中（Steam OST スクレイプ実装済み・UI追加済み・トラック別VideoID実装済み PR#73。import_track_listings.py が残存） |
 | #16 | 1-A | YouTubeメタデータ＋AIタグ自動付与 | ❌ Closed（Claude API断念） |
 | #17 | 2-A | AIユーザー好みプロファイリング | 🔵 Open（タグデータ充実後） |
-| #19 | 即時 | GitHub Secret Scanning + Dependabot 有効化 | ⚠️ 進行中（Dependabot 有効化済み、Secret Scanning 未） |
-| #20 | 運用 | システム監視（UptimeRobot + Sentry） | 🔵 Open |
+| #19 | 即時 | GitHub Secret Scanning + Dependabot 有効化 | ✅ Closed（有効化済み） |
+| #20 | 運用 | システム監視（UptimeRobot + Sentry） | 🔵 Open（UptimeRobot 登録待ち） |
 | #21 | 1-B | 作曲家データの取得・保存方法の確立 | ⚠️ 進行中（Steam OST スクレイプで track_composers 蓄積中） |
 | #22 | 運用 | イベントトラッキング追加（PostHog等） | 🔵 Open（低優先） |
 | #33 | 運用 | Steam store search を公式APIに移行 | 🔵 Open（低優先） |
 | #34 | 完了 | lastfm_similarities.py に --limit 追加 | ✅ Closed（PR#60） |
-| #62 | UX | Steam ログイン価値・安全性説明の改善 | 🔵 Open |
+| #62 | UX | Steam ログイン価値・安全性説明の改善 | ✅ Closed（PR #73） |
 | #63 | 完了 | steam_ost_locked フラグ実装 | ✅ Closed（PR#65） |
