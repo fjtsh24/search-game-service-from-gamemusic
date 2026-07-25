@@ -506,5 +506,5 @@ GitHub Actions のログ分析から、`import_game_tags.py`（日次 Step 1）�
 | `import_steam_soundtracks.py` | バグ修正 | ゲーム追加時に `soundtrack_appid != game_appid`（fullgame 解決済み）の場合、`steam_ost_appid` を即時保存するよう修正。従来は知っているデータを捨てて、discover フェーズが毎日再検索していた |
 | `import_steam_ost_data.py`（discover） | バグ修正 | クエリに `.order("created_at", desc=False)` を追加。order 未指定だと UUID 挿入順の先頭50件が毎日繰り返し試行され、後続ゲームが発見フェーズに入れなかった |
 
-#### 残課題（issue 化済み）
-- `steam_ost_locked` フラグ: 永久に OST が見つからないゲームを discover フェーズの対象から除外する仕組みが未実装。現状は order 追加でローテーションは改善されたが、失敗済みゲームをスキップするフラグが必要（`tags_locked` / `youtube_locked` と同パターン）
+#### 残課題
+- （解消済み）`steam_ost_locked` フラグ → 2026-07-25 実装（`fix/steam-ost-locked` ブランチ）

@@ -3,8 +3,10 @@ Steam Music アプリ（type=music）からトラックリストと作曲家ク�
 
 2フェーズで実行:
   Phase discover（APIベース）:
-    steam_ost_appid が未設定のゲームを対象に、Steam Search + appdetails API で
-    対応する Music アプリを発見して games.steam_ost_appid に保存する。
+    steam_ost_appid が未設定かつ steam_ost_locked=FALSE のゲームを対象に、
+    Steam Search + appdetails API で対応する Music アプリを発見して
+    games.steam_ost_appid に保存する。
+    見つからなかったゲームには steam_ost_locked=TRUE をセットして以後スキップ。
 
   Phase scrape（HTMLスクレイピング）:
     steam_ost_appid があって steam_ost_scraped_at が未設定のゲームを対象に、
@@ -12,12 +14,13 @@ Steam Music アプリ（type=music）からトラックリストと作曲家ク�
     サーバー負荷への配慮として、リクエスト間隔を 600 秒（10分）に設定している。
 
 使い方:
-  python3 scripts/import_steam_ost_data.py [--phase discover|scrape|all] [--limit N]
+  python3 scripts/import_steam_ost_data.py [--phase discover|scrape|all] [--limit N] [--overwrite]
 
   --phase discover : OSTアプリIDの発見のみ（デフォルト上限: 50件）
   --phase scrape   : スクレイピングのみ（デフォルト上限: 3件）
   --phase all      : 両方を順番に実行（デフォルト）
   --limit N        : 処理件数上限
+  --overwrite      : steam_ost_locked=TRUE のゲームも再試行する
 
 依存:
   pip install requests python-dotenv supabase beautifulsoup4
@@ -129,17 +132,23 @@ def _find_ost_appid(game_title: str, game_appid: int) -> int | None:
     return None
 
 
-def run_discover(limit: int) -> None:
-    games = (
+def _lock_ost(game_id: str) -> None:
+    """steam_ost_locked = TRUE をセット。以後の日次バッチでスキップされる。"""
+    db.table("games").update({"steam_ost_locked": True}).eq("id", game_id).execute()
+
+
+def run_discover(limit: int, overwrite: bool = False) -> None:
+    query = (
         db.table("games")
         .select("id, title, steam_app_id")
         .is_("steam_ost_appid", "null")
         .not_.is_("steam_app_id", "null")
         .order("created_at", desc=False)
         .limit(limit)
-        .execute()
-        .data or []
     )
+    if not overwrite:
+        query = query.eq("steam_ost_locked", False)
+    games = query.execute().data or []
 
     if not games:
         print("[discover] 対象ゲームなし。")
@@ -147,19 +156,26 @@ def run_discover(limit: int) -> None:
 
     print(f"[discover] {len(games)} 件を処理します...")
     found = 0
+    locked_titles: list[str] = []
     for i, game in enumerate(games, 1):
         title = game["title"]
         appid = game["steam_app_id"]
         print(f"[{i}/{len(games)}] {title}")
         ost_appid = _find_ost_appid(title, appid)
         if ost_appid:
-            db.table("games").update({"steam_ost_appid": ost_appid}).eq("id", game["id"]).execute()
+            db.table("games").update({"steam_ost_appid": ost_appid, "steam_ost_locked": False}).eq("id", game["id"]).execute()
             print(f"  → steam_ost_appid={ost_appid}")
             found += 1
         else:
-            print("  → 見つからず")
+            _lock_ost(game["id"])
+            locked_titles.append(title)
+            print("  → 見つからず（steam_ost_locked=TRUE）")
 
     print(f"[discover] 完了 — {found}/{len(games)} 件で OST アプリ発見")
+    if locked_titles:
+        print(f"locked 追加: {len(locked_titles)} 件（再試行するには steam_ost_locked=FALSE に更新）")
+        for t in locked_titles:
+            print(f"  - {t}")
 
 
 # ── Phase scrape ──────────────────────────────────────────────────────────────
@@ -362,9 +378,9 @@ def run_scrape(limit: int) -> None:
 
 # ── メイン ────────────────────────────────────────────────────────────────────
 
-def run(phase: str, limit: int | None) -> None:
+def run(phase: str, limit: int | None, overwrite: bool = False) -> None:
     if phase in ("discover", "all"):
-        run_discover(limit if limit is not None else 50)
+        run_discover(limit if limit is not None else 50, overwrite=overwrite)
         print()
     if phase in ("scrape", "all"):
         run_scrape(limit if limit is not None else 3)
@@ -386,5 +402,11 @@ if __name__ == "__main__":
         default=None,
         help="処理件数上限 (discover デフォルト: 50, scrape デフォルト: 3)",
     )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        default=False,
+        help="steam_ost_locked=TRUE のゲームも再試行する",
+    )
     args = parser.parse_args()
-    run(args.phase, args.limit)
+    run(args.phase, args.limit, overwrite=args.overwrite)
