@@ -1,0 +1,56 @@
+[
+  {
+    "file": "web/app/components/AuthButton.tsx",
+    "line": 36,
+    "check": "title attr (string)",
+    "value": "マイライブラリ"
+  },
+  {
+    "file": "web/app/components/SearchBar.tsx",
+    "line": 68,
+    "check": "placeholder",
+    "value": "ゲーム名・作曲家名で検索..."
+  },
+  {
+    "file": "web/app/components/StarRating.tsx",
+    "line": 43,
+    "check": "aria-label (template)",
+    "value": "${star} 星"
+  },
+  {
+    "file": "web/app/components/TagsWithFlagButton.tsx",
+    "line": 42,
+    "check": "title attr (string)",
+    "value": "このタグは間違っていると思う"
+  },
+  {
+    "file": "web/app/components/TagsWithFlagButton.tsx",
+    "line": 44,
+    "check": "aria-label (template)",
+    "value": "「${tag.name_ja ?? tag.name}」タグを報告"
+  },
+  {
+    "file": "web/app/components/TagsWithFlagButton.tsx",
+    "line": 50,
+    "check": "title attr (string)",
+    "value": "報告を受け付けました"
+  },
+  {
+    "file": "web/app/components/YouTubePlayer.tsx",
+    "line": 100,
+    "check": "confirm()",
+    "value": "この動画が違うと報告しますか？"
+  },
+  {
+    "file": "web/app/components/YouTubePlayer.tsx",
+    "line": 166,
+    "check": "title attr (string)",
+    "value": "この曲の動画を YouTube で見る"
+  },
+  {
+    "file": "web/app/library/page.tsx",
+    "line": 88,
+    "check": "confirm()",
+    "value": "アカウントとすべてのデータを削除しますか？この操作は取り消せません。"
+  }
+]
