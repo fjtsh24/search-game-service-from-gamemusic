@@ -28,7 +28,14 @@ export default function FeedSection({ fallbackGames }: Props) {
           </div>
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
             {feed.map((game) => (
-              <GameCard key={game.id} game={game} />
+              <div key={game.id} className="flex flex-col gap-1.5">
+                <GameCard game={game} />
+                {game.reason_tags && game.reason_tags.length > 0 && (
+                  <p className="px-1 text-xs text-white/30">
+                    {game.reason_tags.map((t) => t.name_ja ?? t.name).join(" · ")} が好きな人に
+                  </p>
+                )}
+              </div>
             ))}
           </div>
         </section>
