@@ -61,6 +61,9 @@ jobs:
       - name: Step 3 — YouTube VideoID 既存補完（20件、locked スキップ）
         run: python3 scripts/import_youtube_video_ids.py --limit 20
 
+      - name: Step 3b — トラック別 YouTube VideoID 補完（10件）
+        run: python3 scripts/import_youtube_video_ids.py --mode tracks --limit 10
+
       - name: Step 4 — Steam 新規ゲーム追加（5件）
         run: python3 scripts/import_steam_soundtracks.py --limit 5
 
