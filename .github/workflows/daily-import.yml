@@ -52,11 +52,17 @@ jobs:
       - name: Step 1 — ゲームタグ付与（40件、locked スキップ）
         run: python3 scripts/import_game_tags.py --limit 40
 
+      - name: Step 1b — 説明文タグ付与（100件、tags_locked ゲーム対象）
+        run: python3 scripts/import_description_tags.py --limit 100
+
       - name: Step 2 — Steam 説明文バックフィル（30件）
         run: python3 scripts/import_steam_soundtracks.py --backfill --limit 30
 
       - name: Step 3 — YouTube VideoID 既存補完（20件、locked スキップ）
         run: python3 scripts/import_youtube_video_ids.py --limit 20
+
+      - name: Step 3b — トラック別 YouTube VideoID 補完（10件）
+        run: python3 scripts/import_youtube_video_ids.py --mode tracks --limit 10
 
       - name: Step 4 — Steam 新規ゲーム追加（5件）
         run: python3 scripts/import_steam_soundtracks.py --limit 5
@@ -68,12 +74,15 @@ jobs:
         timeout-minutes: 30
         run: python3 scripts/import_steam_ost_data.py --phase scrape --limit 10
 
-      - name: Step 7 — 報告済み動画の確認（要管理者レビュー）
+      - name: Step 7 — 報告済み動画・タグの確認（要管理者レビュー）
         run: |
           python3 - <<'EOF'
           import os
+          from collections import Counter
           from supabase import create_client
           db = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_ROLE_KEY"])
+
+          # 報告済み動画
           rows = (
               db.table("games")
               .select("id, title, youtube_video_id")
@@ -89,7 +98,30 @@ jobs:
                   title = r.get("title", "?")
                   vid = r.get("youtube_video_id", "?")
                   print(f"  - {title}: https://www.youtube.com/watch?v={vid}")
-              print("\n対応後は games.youtube_flagged = FALSE に更新してください。")
+              print("  対応後は games.youtube_flagged = FALSE に更新してください。")
+
+          print()
+
+          # 報告済みタグ
+          flag_rows = (
+              db.table("game_tag_flags")
+              .select("game_id, tag_id")
+              .execute()
+              .data or []
+          )
+          if not flag_rows:
+              print("報告済みタグ: なし")
+          else:
+              counts = Counter((r["game_id"], r["tag_id"]) for r in flag_rows)
+              top10 = counts.most_common(10)
+              game_ids = list({gid for (gid, _), _ in top10})
+              tag_ids  = list({tid for (_, tid), _ in top10})
+              games_map = {g["id"]: g["title"] for g in (db.table("games").select("id, title").in_("id", game_ids).execute().data or [])}
+              tags_map  = {t["id"]: (t.get("name_ja") or t["name"]) for t in (db.table("mood_tags").select("id, name, name_ja").in_("id", tag_ids).execute().data or [])}
+              print(f"⚠ 報告済みタグ {len(counts)} ペア（上位10件）:")
+              for (gid, tid), cnt in top10:
+                  print(f"  - [{cnt}件] {games_map.get(gid, gid[:8])}: #{tags_map.get(tid, tid[:8])}")
+              print("  対応後は該当 game_tags レコードを削除し、game_tag_flags もクリアしてください。")
           EOF
 
       - name: Step 8 — Last.fm 作曲家類似度更新（新規作曲家優先 30件）
