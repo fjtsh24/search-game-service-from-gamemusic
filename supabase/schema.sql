@@ -23,6 +23,7 @@ CREATE TABLE games (
   cover_image_url      TEXT,
   tags_locked          BOOLEAN     NOT NULL DEFAULT FALSE,
   youtube_locked       BOOLEAN     NOT NULL DEFAULT FALSE,
+  steam_ost_locked     BOOLEAN     NOT NULL DEFAULT FALSE,
   is_discoverable      BOOLEAN     NOT NULL DEFAULT FALSE,
   steam_ost_appid      BIGINT      UNIQUE,
   steam_ost_scraped_at TIMESTAMPTZ,
@@ -35,6 +36,7 @@ CREATE TABLE games (
 COMMENT ON COLUMN games.steam_app_id     IS 'Steam ゲーム本体のappid（サントラDLC/Soundtrackのappidではない）。GetOwnedGames API と突合して user_games にマッチさせるために使用。';
 COMMENT ON COLUMN games.tags_locked      IS 'TRUE: Last.fm でタグが取得できないゲーム。日次バッチがスキップする。';
 COMMENT ON COLUMN games.youtube_locked   IS 'TRUE: YouTube で動画が見つからないゲーム。日次バッチがスキップする。';
+COMMENT ON COLUMN games.steam_ost_locked IS 'TRUE: Steam に Music アプリ（OST）が存在しないゲーム。discover フェーズがスキップする。';
 COMMENT ON COLUMN games.youtube_video_id IS 'OST 全体の YouTube 動画 ID。トラック単位の動画は tracks.youtube_video_id を参照。';
 COMMENT ON COLUMN games.youtube_flagged  IS 'TRUE: ユーザーから「動画が違う」報告あり。管理者確認待ち。';
 
