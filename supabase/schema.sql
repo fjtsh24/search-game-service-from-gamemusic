@@ -131,6 +131,18 @@ CREATE TABLE system_settings (
 );
 
 
+CREATE TABLE game_tag_flags (
+  id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  game_id    UUID        NOT NULL REFERENCES games (id) ON DELETE CASCADE,
+  tag_id     UUID        NOT NULL REFERENCES mood_tags (id) ON DELETE CASCADE,
+  user_id    UUID        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (game_id, tag_id, user_id)
+);
+
+COMMENT ON TABLE game_tag_flags IS 'ユーザーが「このタグは間違い」と報告した記録。即時削除せず管理者確認待ち。';
+
+
 -- ── インデックス ───────────────────────────────────────────────────────────────
 
 CREATE INDEX idx_games_steam_app_id       ON games (steam_app_id);
@@ -139,6 +151,8 @@ CREATE INDEX idx_composers_name           ON composers USING gin (to_tsvector('s
 CREATE INDEX idx_tracks_game_id           ON tracks (game_id);
 CREATE INDEX idx_track_composers_composer_id ON track_composers (composer_id);
 CREATE INDEX idx_game_tags_tag_id         ON game_tags (tag_id);
+CREATE INDEX idx_game_tag_flags_game_id   ON game_tag_flags (game_id);
+CREATE INDEX idx_game_tag_flags_tag_id    ON game_tag_flags (tag_id);
 CREATE INDEX idx_composer_sim_a_score     ON composer_similarities (composer_id_a, score DESC);
 CREATE INDEX idx_user_games_user_id       ON user_games (user_id);
 CREATE INDEX idx_user_games_user_rating   ON user_games (user_id, rating DESC NULLS LAST);
@@ -215,6 +229,7 @@ ALTER TABLE composer_similarities ENABLE ROW LEVEL SECURITY;
 ALTER TABLE users               ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_games          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE system_settings     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE game_tag_flags      ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "public_read" ON games               FOR SELECT USING (true);
 CREATE POLICY "public_read" ON composers           FOR SELECT USING (true);
@@ -229,6 +244,9 @@ CREATE POLICY "owner_only"   ON user_games USING (user_id = auth.uid());
 CREATE POLICY "owner_insert" ON user_games FOR INSERT WITH CHECK (user_id = auth.uid());
 CREATE POLICY "owner_update" ON user_games FOR UPDATE USING (user_id = auth.uid());
 CREATE POLICY "owner_delete" ON user_games FOR DELETE USING (user_id = auth.uid());
+
+CREATE POLICY "owner_insert" ON game_tag_flags FOR INSERT WITH CHECK (user_id = auth.uid());
+CREATE POLICY "owner_read"   ON game_tag_flags FOR SELECT USING (user_id = auth.uid());
 
 
 -- ── 初期データ（スキーマの一部として管理）────────────────────────────────────

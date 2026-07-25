@@ -2,6 +2,7 @@ import json
 import random as _random
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 
 from app import cache
 from app.db import get_db
@@ -119,6 +120,27 @@ async def flag_video(game_id: str, session: dict = Depends(require_session)):
 
     db.table("games").update({"youtube_flagged": True}).eq("id", game_id).execute()
     await cache.delete(f"games:detail:{game_id}")
+    return {"flagged": True}
+
+
+class FlagTagRequest(BaseModel):
+    tag_id: str
+
+
+@router.post("/{game_id}/flag-tag")
+async def flag_tag(game_id: str, body: FlagTagRequest, session: dict = Depends(require_session)):
+    """タグが間違っているとユーザーが報告する。
+    タグは即座には削除せず、game_tag_flags に記録して管理者確認待ちにする。
+    """
+    db = get_db()
+    result = db.table("games").select("id").eq("id", game_id).execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    db.table("game_tag_flags").upsert(
+        {"game_id": game_id, "tag_id": body.tag_id, "user_id": session["user_id"]},
+        on_conflict="game_id,tag_id,user_id",
+    ).execute()
     return {"flagged": True}
 
 

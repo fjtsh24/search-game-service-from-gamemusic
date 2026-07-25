@@ -100,6 +100,12 @@ export const authApi = {
 
   flagVideo: (gameId: string) =>
     authFetch<{ flagged: boolean }>(`/games/${gameId}/flag-video`, { method: "POST" }),
+
+  flagTag: (gameId: string, tagId: string) =>
+    authFetch<{ flagged: boolean }>(`/games/${gameId}/flag-tag`, {
+      method: "POST",
+      body: JSON.stringify({ tag_id: tagId }),
+    }),
 };
 
 export const api = {
