@@ -3,6 +3,7 @@ import Link from "next/link";
 import { headers } from "next/headers";
 import { api, GameDetail } from "@/app/lib/api";
 import GameCard from "@/app/components/GameCard";
+import TagsWithFlagButton from "@/app/components/TagsWithFlagButton";
 import YouTubePlayer from "@/app/components/YouTubePlayer";
 import StarRating from "@/app/components/StarRating";
 
@@ -67,17 +68,7 @@ export default async function GamePage({ params }: { params: Promise<{ id: strin
 
           {/* タグ */}
           {tags.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {tags.map((tag) => (
-                <Link
-                  key={tag.id}
-                  href={`/tags/${tag.id}`}
-                  className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/60 hover:border-indigo-400/60 hover:bg-indigo-500/10 hover:text-white transition-colors"
-                >
-                  # {tag.name_ja ?? tag.name}
-                </Link>
-              ))}
-            </div>
+            <TagsWithFlagButton tags={tags} gameId={id} />
           )}
 
           {/* 作曲家 */}
