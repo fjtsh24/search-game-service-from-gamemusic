@@ -208,7 +208,8 @@ async def get_feed(limit: int = Query(default=20, le=100), session: dict = Depen
     for gid, boost in composer_boost.items():
         scores[gid] = scores.get(gid, 0) + boost
 
-    top_ids = sorted(scores, key=lambda g: -scores[g])[:limit]
+    # is_discoverable=FALSE のゲームがスコア上位に混入しても最終的に limit 件返せるよう余裕を持って取得
+    top_ids = sorted(scores, key=lambda g: -scores[g])[:limit * 3]
     if not top_ids:
         return []
 
@@ -224,6 +225,8 @@ async def get_feed(limit: int = Query(default=20, le=100), session: dict = Depen
     for g in sorted(games.data, key=lambda g: order.get(g["id"], 999)):
         _attach_reason_tags(g, game_reason_tag_ids.get(g["id"], set()), tag_weights)
         result.append(g)
+        if len(result) >= limit:
+            break
 
     await cache.set(cache_key, result, ex=600)
     return result
