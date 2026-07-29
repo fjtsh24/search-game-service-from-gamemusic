@@ -47,7 +47,9 @@ class TestListGames:
         assert resp.status_code == 200
 
     def test_tag_id_filter_accepted(self, client):
-        db = make_db({"game_tags": [{"games": GAME_ROW}]})
+        # game_tags テーブルは game_id リストを返し、games テーブルから詳細を取得する設計
+        game_row = {k: v for k, v in GAME_ROW.items() if k not in ("description", "description_ja", "description_zh", "tracks")}
+        db = make_db({"game_tags": [{"game_id": "game-1"}], "games": [game_row]})
         with patch("app.routers.games.get_db", return_value=db):
             resp = client.get("/games?tag_id=some-tag")
         assert resp.status_code == 200

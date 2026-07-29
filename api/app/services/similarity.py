@@ -138,20 +138,21 @@ async def similar_games_for(game_id: str, limit: int = 8) -> list[dict]:
         scores.append((score, gid))
 
     scores.sort(reverse=True)
-    top_ids = [gid for _, gid in scores[:limit]]
+    top_ids_extended = [gid for _, gid in scores[:limit * 3]]
 
-    if not top_ids:
+    if not top_ids_extended:
         return []
 
-    # ゲーム詳細を取得してスコア順に返す（タグも含めてカードに表示できるように）
+    # is_discoverable=True のゲームのみ返す（非公開ゲームをスコア上位に選んでも除外）
     games_result = (
         db.table("games")
         .select("id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja))")
-        .in_("id", top_ids)
+        .in_("id", top_ids_extended)
+        .eq("is_discoverable", True)
         .execute()
     )
-    order = {gid: i for i, gid in enumerate(top_ids)}
-    return sorted(games_result.data, key=lambda g: order.get(g["id"], 999))
+    order = {gid: i for i, gid in enumerate(top_ids_extended)}
+    return sorted(games_result.data, key=lambda g: order.get(g["id"], 999))[:limit]
 
 
 async def composer_boost_for_games(

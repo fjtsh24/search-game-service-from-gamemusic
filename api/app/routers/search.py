@@ -38,7 +38,7 @@ async def search_games(q: str = Query(min_length=1)):
     result = (
         db.table("games")
         .select("id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja))")
-        .ilike("title", f"%{q}%")
+        .or_(f"title.ilike.%{q}%,title_ja.ilike.%{q}%")
         .limit(20)
         .execute()
     )
