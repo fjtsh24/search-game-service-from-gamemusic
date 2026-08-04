@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from app import cache
 from app.db import get_db
 from app.services.similarity import similar_games_for
-from app.session import optional_session, require_session
+from app.session import optional_session
 
 router = APIRouter()
 
