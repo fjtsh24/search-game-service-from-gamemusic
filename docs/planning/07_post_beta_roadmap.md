@@ -140,6 +140,40 @@ Last.fm album.getInfo
 
 ---
 
+### 1-D: Steam「良質サントラ」ユーザータグを活用した新規ゲーム追加（→ issue #90）
+
+**目的**: Steam の「良質サントラ」ユーザータグで絞り込んだゲームを新規取込み対象に追加する。
+
+**背景と価値**:
+- 現在の `import_steam_soundtracks.py` は「サントラDLCが存在する」ゲームを起点に検索している
+- 「良質サントラ」タグはユーザーが「音楽が良い」と感じたゲームに直接つけるタグのため、DLC がないゲームも多数含まれる
+- 例: OST を別販売していない名作インディーゲームが拾えるようになる
+- Steamユーザーのコレクティブな評価を品質フィルタとして活用できる
+
+**仕組み**:
+```
+Steam タグ検索（良質サントラ tag ID）
+  → レビュー数・スコアで品質フィルタ（既存の --min-score と同じ基準）
+  → 既登録ゲームをスキップ（existing_app_ids）
+  → upsert_game() で登録（既存パイプラインと合流）
+  → 以降は YouTube / タグ付与 / 類似度の日次バッチが自動補完
+```
+
+**実装検討事項**:
+- Steam タグ検索の URL/API（`/search/?tags=TAGID`）の tag ID を確認する
+- 「良質サントラ」タグの tag ID は Steam の Browse Tags ページや既存ゲームのタグリストから取得可能
+- 既存の `import_steam_soundtracks.py` にモードとして追加するか、別スクリプト `import_steam_tag_search.py` を作るかを検討
+  - **推奨: 別スクリプト**（検索元が異なるため分離した方が責務が明確）
+- 日次バッチの新規ゲーム追加 Step（現行 Step 4: 5件/日）と協調させる
+
+**実装タスク**:
+- [ ] Steam「良質サントラ」タグの tag ID を調査・確認
+- [ ] `import_steam_tag_search.py` 新規作成（既存の品質フィルタ・upsert_game を再利用）
+- [ ] `daily-import.yml` の新規ゲーム追加ステップに組み込み（またはバッチ Step として追加）
+- [ ] 初回手動実行・件数確認
+
+---
+
 ## Phase 2: レコメンド深化
 
 Phase 1でゲームのタグデータが充実してから着手する。
@@ -277,6 +311,8 @@ Phase 1-A (説明文タグ付与) ✅
 Phase 1-B (トラックリスト)
   └→ Phase 3-A (トラック選択プレーヤー)    ← トラックデータが前提
 
+Phase 1-D (良質サントラタグ検索) ← 既存パイプラインと独立して追加可能
+
 Phase 2-A / 2-B ✅
   └→ Phase 2-C                              ← レコメンド改善が前提
 
@@ -292,6 +328,7 @@ Phase 3-A / 3-B / 3-C は独立して進められる
 | #14 | 1-C | タグ付与ソース拡張（Bandcamp等） | ⚠️ 一部完了（説明文抽出 PR#71 完了、Bandcamp は利用規約確認待ち） |
 | #15 | 1-B | トラックリスト取得・保存・表示 | ⚠️ 進行中（Steam OST スクレイプ実装済み・UI追加済み・トラック別VideoID実装済み PR#73。import_track_listings.py が残存） |
 | #16 | 1-A | YouTubeメタデータ＋AIタグ自動付与 | ❌ Closed（Claude API断念） |
+| #90 | 1-D | Steam「良質サントラ」タグで新規ゲーム発見 | 🔵 Open |
 | #17 | 2-A | AIユーザー好みプロファイリング | 🔵 Open（タグデータ充実後） |
 | #19 | 即時 | GitHub Secret Scanning + Dependabot 有効化 | ✅ Closed（有効化済み） |
 | #20 | 運用 | システム監視（UptimeRobot + Sentry） | 🔵 Open（UptimeRobot 登録待ち） |
