@@ -27,6 +27,7 @@ import logging
 import re
 import time
 import os
+from datetime import datetime, timezone
 import requests
 from dotenv import load_dotenv
 
@@ -58,6 +59,7 @@ STEAM_REVIEWS_URL = "https://store.steampowered.com/appreviews/{appid}"
 STEAM_APP_DETAILS_URL = "https://store.steampowered.com/api/appdetails"
 STEAM_WAIT = 1.2
 PAGE_SIZE = 25
+_RETRY_ATTEMPTS = 3
 MIN_REVIEW_COUNT = 10
 MAX_SCORE_CHECKS = 60
 MAX_PAGES = 25
@@ -84,42 +86,63 @@ _LOGO_APPID_RE = re.compile(r"/apps/(\d+)/")
 
 # ── Steam API ─────────────────────────────────────────────────────────────────
 
+def _http_get_with_retry(url: str, params: dict | None = None, timeout: int = 10) -> requests.Response:
+    """指数バックオフで最大 _RETRY_ATTEMPTS 回リトライする HTTP GET。"""
+    for attempt in range(_RETRY_ATTEMPTS):
+        try:
+            resp = http.get(url, params=params, timeout=timeout)
+            resp.raise_for_status()
+            return resp
+        except requests.RequestException as e:
+            if attempt == _RETRY_ATTEMPTS - 1:
+                raise
+            wait = 2 ** attempt
+            logging.warning("HTTP 失敗 (attempt %d/%d) %s: %s — %ds 待機", attempt + 1, _RETRY_ATTEMPTS, url, e, wait)
+            time.sleep(wait)
+    raise RuntimeError("unreachable")
+
+
 def fetch_tag_search_page(tag_id: int, start: int) -> list[dict]:
     """Steam タグ検索結果をレビュー数降順で 25 件取得。"""
     time.sleep(STEAM_WAIT)
-    resp = http.get(STEAM_SEARCH_URL, params={
-        "tags": str(tag_id),
-        "sort_by": "Reviews_DESC",
-        "json": "1",
-        "start": start,
-        "count": PAGE_SIZE,
-    }, timeout=15)
-    resp.raise_for_status()
+    try:
+        resp = http.get(STEAM_SEARCH_URL, params={
+            "tags": str(tag_id),
+            "sort_by": "Reviews_DESC",
+            "json": "1",
+            "start": start,
+            "count": PAGE_SIZE,
+        }, timeout=15)
+        resp.raise_for_status()
 
-    results = []
-    for item in resp.json().get("items", []):
-        logo = item.get("logo", "")
-        m = _LOGO_APPID_RE.search(logo)
-        if not m:
-            logging.warning("appid を logo URL から抽出できませんでした: logo=%r name=%r", logo, item.get("name"))
-            continue
-        results.append({
-            "appid": int(m.group(1)),
-            "title": html.unescape(item.get("name", "").strip()),
-        })
-    return results
+        results = []
+        for item in resp.json().get("items", []):
+            logo = item.get("logo", "")
+            m = _LOGO_APPID_RE.search(logo)
+            if not m:
+                logging.warning("appid を logo URL から抽出できませんでした: logo=%r name=%r", logo, item.get("name"))
+                continue
+            results.append({
+                "appid": int(m.group(1)),
+                "title": html.unescape(item.get("name", "").strip()),
+            })
+        return results
+    except requests.RequestException:
+        logging.exception("fetch_tag_search_page HTTP 失敗 tag=%s start=%s", tag_id, start)
+        return []
+    except (ValueError, KeyError):
+        logging.exception("fetch_tag_search_page JSON パース失敗 tag=%s start=%s", tag_id, start)
+        return []
 
 
 def fetch_review_score(appid: int) -> tuple[int, int, int]:
     """Steam appreviews API でゲームのレビュースコアを取得。"""
     time.sleep(STEAM_WAIT)
     try:
-        resp = http.get(
+        resp = _http_get_with_retry(
             STEAM_REVIEWS_URL.format(appid=appid),
             params={"json": "1", "language": "all", "num_per_page": "0", "purchase_type": "all"},
-            timeout=10,
         )
-        resp.raise_for_status()
         qs = resp.json().get("query_summary", {})
         return (
             int(qs.get("review_score", 0)),
@@ -134,12 +157,10 @@ def fetch_review_score(appid: int) -> tuple[int, int, int]:
 def _fetch_appdetails(game_appid: int, lang: str) -> dict:
     time.sleep(STEAM_WAIT)
     try:
-        resp = http.get(
+        resp = _http_get_with_retry(
             STEAM_APP_DETAILS_URL,
             params={"appids": game_appid, "filters": "basic,release_date", "l": lang},
-            timeout=10,
         )
-        resp.raise_for_status()
         d = resp.json().get(str(game_appid), {})
         return d.get("data", {}) if d.get("success") else {}
     except Exception:
@@ -241,7 +262,11 @@ def _load_scan_offset() -> int:
 def _save_scan_offset(offset: int) -> None:
     """次回スキャン開始位置を DB に保存する。"""
     db.table("system_settings").upsert(
-        {"key": SCAN_OFFSET_KEY, "value": str(offset), "updated_at": "now()"},
+        {
+            "key": SCAN_OFFSET_KEY,
+            "value": str(offset),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
         on_conflict="key",
     ).execute()
 
