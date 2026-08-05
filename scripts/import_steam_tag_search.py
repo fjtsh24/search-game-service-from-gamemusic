@@ -201,6 +201,26 @@ def upsert_game(
 
 # ── メインループ ───────────────────────────────────────────────────────────────
 
+SCAN_OFFSET_KEY = "steam_tag_scan_offset"
+
+
+def _load_scan_offset() -> int:
+    """前回スキャン終了位置を DB から取得する。"""
+    rows = db.table("system_settings").select("value").eq("key", SCAN_OFFSET_KEY).execute().data
+    try:
+        return int(rows[0]["value"]) if rows else 0
+    except (IndexError, ValueError):
+        return 0
+
+
+def _save_scan_offset(offset: int) -> None:
+    """次回スキャン開始位置を DB に保存する。"""
+    db.table("system_settings").upsert(
+        {"key": SCAN_OFFSET_KEY, "value": str(offset), "updated_at": "now()"},
+        on_conflict="key",
+    ).execute()
+
+
 def run(limit: int, min_score: int) -> None:
     label = SCORE_LABELS.get(min_score, f"score>={min_score}")
     print(f"Steam「良質サントラ」タグ検索（tag={GREAT_SOUNDTRACK_TAG_ID}、{label} 以上）を最大 {limit} 件取得します\n")
@@ -217,15 +237,20 @@ def run(limit: int, min_score: int) -> None:
     }
     print(f"既登録ゲーム: {len(existing_app_ids)} 件\n")
 
+    scan_start = _load_scan_offset()
+    print(f"スキャン開始位置: {scan_start} 件目\n")
+
     qualified: list[dict] = []
-    start = 0
+    start = scan_start
     score_checks = 0
     pages_fetched = 0
+    reached_end = False
 
     while len(qualified) < limit and score_checks < MAX_SCORE_CHECKS and pages_fetched < MAX_PAGES:
         page = fetch_tag_search_page(GREAT_SOUNDTRACK_TAG_ID, start)
         if not page:
             print("Steam 検索結果の末尾に達しました。")
+            reached_end = True
             break
 
         pages_fetched += 1
@@ -254,6 +279,10 @@ def run(limit: int, min_score: int) -> None:
 
         start += PAGE_SIZE
         print(f"  → {start} 件目まで / スコア確認 {score_checks} 件 / 合格 {len(qualified)} 件\n")
+
+    next_offset = 0 if reached_end else start
+    _save_scan_offset(next_offset)
+    print(f"次回スキャン開始位置: {next_offset} 件目\n")
 
     qualified.sort(key=lambda x: (-x["score"], -x["pct"]))
     targets = qualified[:limit]
