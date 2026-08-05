@@ -13,16 +13,24 @@ import_steam_soundtracks.py（OST DLC 起点）を補完する別ルート。
 使い方:
   python3 scripts/import_steam_tag_search.py [--limit 20] [--min-score 8]
 
+必要な環境変数 (.env ファイルまたはシェル環境で設定):
+  SUPABASE_URL          : Supabase プロジェクト URL（例: https://xxxx.supabase.co）
+  SUPABASE_SERVICE_ROLE_KEY : Supabase サービスロールキー
+
 依存:
   pip install requests python-dotenv supabase
 """
 
 import argparse
 import html
+import logging
+import re
 import time
 import os
 import requests
 from dotenv import load_dotenv
+
+logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
 load_dotenv()
 
@@ -32,8 +40,17 @@ except ImportError:
     print("pip install requests python-dotenv supabase")
     raise SystemExit(1)
 
-SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+
+def _require_env(name: str) -> str:
+    val = os.environ.get(name)
+    if not val:
+        print(f"エラー: 環境変数 {name} が設定されていません。.env ファイルを確認してください。")
+        raise SystemExit(1)
+    return val
+
+
+SUPABASE_URL = _require_env("SUPABASE_URL")
+SUPABASE_SERVICE_ROLE_KEY = _require_env("SUPABASE_SERVICE_ROLE_KEY")
 db = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 STEAM_SEARCH_URL = "https://store.steampowered.com/search/results/"
@@ -56,10 +73,13 @@ SCORE_LABELS = {
     5: "Mostly Negative",
 }
 
-_ALLOWED_APP_TYPES = {"game", ""}
+# 空文字列を除外: app_type が取得できないケース（API 失敗）はゲームと見なさない
+_ALLOWED_APP_TYPES = {"game"}
 
 http = requests.Session()
 http.headers.update({"User-Agent": "GameMusicDiscovery/0.1.0 (hobby project)"})
+
+_LOGO_APPID_RE = re.compile(r"/apps/(\d+)/")
 
 
 # ── Steam API ─────────────────────────────────────────────────────────────────
@@ -78,15 +98,15 @@ def fetch_tag_search_page(tag_id: int, start: int) -> list[dict]:
 
     results = []
     for item in resp.json().get("items", []):
-        appid_str = item.get("logo", "")
-        # logo URL 例: https://cdn.akamai.steamstatic.com/steam/apps/12345/...
-        import re
-        m = re.search(r"/apps/(\d+)/", appid_str)
-        if m:
-            results.append({
-                "appid": int(m.group(1)),
-                "title": html.unescape(item.get("name", "").strip()),
-            })
+        logo = item.get("logo", "")
+        m = _LOGO_APPID_RE.search(logo)
+        if not m:
+            logging.warning("appid を logo URL から抽出できませんでした: logo=%r name=%r", logo, item.get("name"))
+            continue
+        results.append({
+            "appid": int(m.group(1)),
+            "title": html.unescape(item.get("name", "").strip()),
+        })
     return results
 
 
@@ -107,6 +127,7 @@ def fetch_review_score(appid: int) -> tuple[int, int, int]:
             int(qs.get("total_reviews", 0)),
         )
     except Exception:
+        logging.exception("fetch_review_score 失敗 appid=%s", appid)
         return 0, 0, 0
 
 
@@ -122,6 +143,7 @@ def _fetch_appdetails(game_appid: int, lang: str) -> dict:
         d = resp.json().get(str(game_appid), {})
         return d.get("data", {}) if d.get("success") else {}
     except Exception:
+        logging.exception("_fetch_appdetails 失敗 appid=%s lang=%s", game_appid, lang)
         return {}
 
 
@@ -192,8 +214,11 @@ def upsert_game(
 
     existing = db.table("games").select("id").eq("steam_app_id", steam_app_id).execute().data
     if existing:
+        if len(existing) > 1:
+            logging.warning("steam_app_id=%s の重複行が %d 件あります", steam_app_id, len(existing))
+        game_id = existing[0]["id"]
         db.table("games").update(payload).eq("steam_app_id", steam_app_id).execute()
-        return existing[0]["id"]
+        return game_id
 
     result = db.table("games").insert({**payload, "steam_app_id": steam_app_id}).execute()
     return result.data[0]["id"] if result.data else None
@@ -297,7 +322,8 @@ def run(limit: int, min_score: int) -> None:
 
         description, description_ja, description_zh, title_ja, release_year, app_type = fetch_game_metadata(appid)
         if app_type not in _ALLOWED_APP_TYPES:
-            print(f"  skip: type={app_type!r} — ゲーム本体ではないため除外")
+            reason = "API 取得失敗" if app_type == "" else f"type={app_type!r}"
+            print(f"  skip: {reason} — 除外")
             continue
 
         if description:
