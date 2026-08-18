@@ -135,21 +135,29 @@ Marvel's Spider-Man Remastered → （なし）※スーパーヒーロー系は
 
 ---
 
-## 5. 調査中に見つかった別の問題（要 issue 化）
+## 5. 調査中に見つかった別の問題 → issue #105 として起票済み
 
-**`games.youtube_video_id` の相当数が OST 動画ではない。** 10件サンプル中5件が誤り:
+**`games.youtube_video_id` の 31% が OST と無関係な動画。** 全310件を `videos.list` で検証した実測:
 
-| ゲーム | 実際に紐付いている動画 |
-|---|---|
-| AQUARIUM | 「12 Hours of Stunning Aquarium Relax Music」（無関係な作業用BGM） |
-| The Mr. Rabbit Magic Show | 攻略実況動画 |
-| CATO: Buttered Cat | Nintendo の launch trailer |
-| Travellin Cats in Bali | 個人の旅行 vlog |
-| 坦率的小红帽和爱说谎的狼 | ファン翻訳のプレイ動画 |
+| 分類 | 件数 | 割合 |
+|---|---|---|
+| A: 実況・攻略・レビュー | 9 | 2.9% |
+| B: トレーラー | 15 | 4.8% |
+| C: 音楽の根拠なし（無関係の可能性） | 58 | 18.7% |
+| D: 音楽だが尺が短すぎる（単曲・クリップ） | 14 | 4.5% |
+| E: OK（OST語 or `- Topic` チャンネル） | 169 | 54.5% |
+| F: 弱OK（音楽カテゴリだがOST語なし） | 45 | 14.5% |
 
-305件に動画IDが付いており、`is_discoverable` の判定にも使われているため、**現在ユーザーに見えている品質問題**。判定に使える材料は確認済み（`snippet.channelTitle` が `- Topic` で終わる / タイトルに `OST|Soundtrack|BGM` / `topicDetails.topicCategories` に `Music`）。
+→ **要対応 96 / 310 件（31.0%）**
 
----
+例: AQUARIUM →「12 Hours of Aquarium Relax Music」/ CATO: Buttered Cat → Nintendo の Launch Trailer /
+Travellin Cats in Bali → 個人の旅行 vlog（16秒）/ 100 Ninja Cats → 別ゲーム「The Battle Cats」
+
+原因は `import_youtube_video_ids.py` の `run_games` にあり、`maxResults: 1` で検索1位を無条件採用、
+`_title_matches()` が非ASCIIタイトルを `return True` で素通しし、動画が音楽かどうかを一切見ていない。
+
+**正常判定(E)の最小尺は 92秒（90秒未満は0件）** のため、90秒の下限は正常な OST を誤除外しない。
+対策案とプロトタイプ検証結果は issue #105 に記載。
 
 ## 6. 提案する設計
 
