@@ -8,15 +8,21 @@ Steam Music アプリ（type=music）からトラックリストと作曲家ク�
     games.steam_ost_appid に保存する。
     見つからなかったゲームには steam_ost_locked=TRUE をセットして以後スキップ。
 
+  Phase tags（APIベース）:
+    steam_ost_appid があるゲームの OST 説明文を appdetails API から取得し、
+    ムードタグを抽出して game_tags に保存する（added_by='steam_ost_desc'）。
+    games.description と違い OST 説明文は音楽そのものの記述なのでタグ抽出に有効。
+
   Phase scrape（HTMLスクレイピング）:
     steam_ost_appid があって steam_ost_scraped_at が未設定のゲームを対象に、
     Steam ストアページをスクレイピングしてトラックリストと作曲家クレジットを取得する。
     サーバー負荷への配慮として、リクエスト間隔を 600 秒（10分）に設定している。
 
 使い方:
-  python3 scripts/import_steam_ost_data.py [--phase discover|scrape|all] [--limit N] [--overwrite]
+  python3 scripts/import_steam_ost_data.py [--phase discover|tags|scrape|all] [--limit N] [--overwrite]
 
   --phase discover : OSTアプリIDの発見のみ（デフォルト上限: 50件）
+  --phase tags     : OST説明文からムードタグ抽出（デフォルト上限: 50件）
   --phase scrape   : スクレイピングのみ（デフォルト上限: 3件）
   --phase all      : 両方を順番に実行（デフォルト）
   --limit N        : 処理件数上限
@@ -30,11 +36,14 @@ import argparse
 import os
 import re
 import time
+from html import unescape
 from datetime import datetime, timezone
 
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+
+from music_text_tags import extract_tags
 
 load_dotenv(dotenv_path=".env")
 
@@ -55,6 +64,14 @@ STEAM_STORE_URL = "https://store.steampowered.com/app/{appid}/"
 
 DISCOVER_WAIT = 1.0
 SCRAPE_WAIT = 120
+TAGS_WAIT = 1.3
+
+# OST 説明文由来タグの識別子と確信度（Tier 1: 音楽そのものの記述に基づく直接証拠）
+OST_TAG_SOURCE = "steam_ost_desc"
+OST_TAG_CONFIDENCE = 0.9
+
+UPSTASH_REDIS_URL = os.environ.get("UPSTASH_REDIS_URL", "")
+UPSTASH_REDIS_TOKEN = os.environ.get("UPSTASH_REDIS_TOKEN", "")
 
 _OST_KEYWORDS = ("soundtrack", "ost", "music")
 
@@ -376,11 +393,168 @@ def run_scrape(limit: int) -> None:
     print(f"[scrape] 完了 — {len(games)} 件処理")
 
 
+
+# ── Phase tags ────────────────────────────────────────────────────────────────
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _plain_text(html_text: str) -> str:
+    """Steam の説明文 HTML からプレーンテキストを取り出す。"""
+    if not html_text:
+        return ""
+    return " ".join(unescape(_HTML_TAG_RE.sub(" ", html_text)).split())
+
+
+def _fetch_ost_description(ost_appid: int) -> str:
+    """appdetails API から OST の説明文（detailed + short）を取得する。
+
+    ストアページの HTML スクレイピングではなく appdetails API を使う。
+    """
+    time.sleep(TAGS_WAIT)
+    try:
+        resp = http.get(STEAM_APPDETAILS_URL, params={
+            "appids": ost_appid,
+            "l": "english",
+        }, timeout=15)
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"  appdetails エラー (appid={ost_appid}): {e}")
+        return ""
+
+    entry = resp.json().get(str(ost_appid)) or {}
+    if not entry.get("success"):
+        return ""
+    data = entry["data"]
+    return _plain_text(
+        f"{data.get('detailed_description') or ''} {data.get('short_description') or ''}"
+    )
+
+
+def _clear_tag_cache(game_ids: list[str], tag_ids: list[str]) -> None:
+    """タグ更新後に関連する Redis キャッシュを削除する。"""
+    if not UPSTASH_REDIS_URL or not UPSTASH_REDIS_TOKEN:
+        return
+    keys: list[str] = []
+    for gid in game_ids:
+        keys.append(f"games:detail:{gid}")
+        keys.append(f"games:similar:{gid}:8")
+    for tid in tag_ids:
+        for limit in (20, 50, 100):
+            keys.append(f"games:list:{tid}:{limit}")
+    for limit in (20, 50, 100):
+        keys.append(f"games:list:all:{limit}")
+    if not keys:
+        return
+    try:
+        resp = http.post(
+            f"{UPSTASH_REDIS_URL}/",
+            headers={"Authorization": f"Bearer {UPSTASH_REDIS_TOKEN}"},
+            json=["del"] + keys,
+            timeout=5,
+        )
+        print(f"キャッシュクリア: {resp.json().get('result', '?')} 件削除")
+    except Exception as e:
+        print(f"キャッシュクリア失敗（無視）: {e}")
+
+
+def run_tags(limit: int, dry_run: bool = False) -> None:
+    """OST ストアページの説明文から mood タグを抽出して game_tags に保存する。
+
+    games.description（Steam の short_description）はゲームプレイの宣伝文であり
+    音楽への言及をほとんど含まないが、OST（type=music）の説明文は音楽そのものの
+    記述であるため、mood タグの抽出元として有効。
+    詳細: docs/planning/08_tagging_redesign.md §4-A
+    """
+    tag_rows = db.table("mood_tags").select("id, name").execute().data or []
+    tag_id_map: dict[str, str] = {r["name"]: r["id"] for r in tag_rows}
+
+    # すでにこのソースでタグ付け済みのゲームは対象外
+    done_rows = (
+        db.table("game_tags")
+        .select("game_id")
+        .eq("added_by", OST_TAG_SOURCE)
+        .execute()
+        .data or []
+    )
+    already_done = {r["game_id"] for r in done_rows}
+
+    candidates = (
+        db.table("games")
+        .select("id, title, steam_ost_appid")
+        .not_.is_("steam_ost_appid", "null")
+        .order("created_at", desc=False)
+        .execute()
+        .data or []
+    )
+    games = [g for g in candidates if g["id"] not in already_done][:limit]
+
+    if not games:
+        print("[tags] 対象ゲームなし。")
+        return
+
+    print(f"[tags] {len(games)} 件を処理します...")
+    tagged_game_ids: list[str] = []
+    tagged_tag_ids: set[str] = set()
+    total_tags = 0
+    no_match = 0
+
+    for i, game in enumerate(games, 1):
+        title = game["title"]
+        print(f"[{i}/{len(games)}] {title}")
+
+        text = _fetch_ost_description(game["steam_ost_appid"])
+        if not text:
+            print("  → 説明文を取得できず（次回再試行）")
+            continue
+
+        names = extract_tags(text, music_context=True)
+        if not names:
+            print(f"  → ムードタグにマッチせず（{len(text)} 字）")
+            no_match += 1
+            continue
+
+        rows = []
+        for name in names:
+            tid = tag_id_map.get(name)
+            if not tid:
+                print(f"  タグ ID 不明: {name}")
+                continue
+            rows.append({
+                "game_id": game["id"],
+                "tag_id": tid,
+                "confidence": OST_TAG_CONFIDENCE,
+                "added_by": OST_TAG_SOURCE,
+            })
+            tagged_tag_ids.add(tid)
+
+        if not rows:
+            continue
+
+        print(f"  → タグ付与: {', '.join(names)}")
+        if not dry_run:
+            db.table("game_tags").upsert(rows, on_conflict="game_id,tag_id").execute()
+        tagged_game_ids.append(game["id"])
+        total_tags += len(rows)
+
+    print(
+        f"[tags] 完了 — {len(tagged_game_ids)} ゲームに計 {total_tags} タグ付与"
+        f"（マッチなし {no_match} 件）"
+    )
+    if dry_run:
+        print("[tags] dry-run のため DB 書き込みはスキップしました")
+    elif tagged_game_ids:
+        _clear_tag_cache(tagged_game_ids, list(tagged_tag_ids))
+
+
 # ── メイン ────────────────────────────────────────────────────────────────────
 
-def run(phase: str, limit: int | None, overwrite: bool = False) -> None:
+def run(phase: str, limit: int | None, overwrite: bool = False, dry_run: bool = False) -> None:
     if phase in ("discover", "all"):
         run_discover(limit if limit is not None else 50, overwrite=overwrite)
+        print()
+    if phase in ("tags", "all"):
+        run_tags(limit if limit is not None else 50, dry_run=dry_run)
         print()
     if phase in ("scrape", "all"):
         run_scrape(limit if limit is not None else 3)
@@ -392,15 +566,18 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--phase",
-        choices=["discover", "scrape", "all"],
+        choices=["discover", "tags", "scrape", "all"],
         default="all",
-        help="実行フェーズ: discover=OSTアプリID発見, scrape=ページ取得, all=両方 (デフォルト: all)",
+        help=(
+            "実行フェーズ: discover=OSTアプリID発見, tags=OST説明文からムードタグ抽出, "
+            "scrape=ページ取得, all=すべて (デフォルト: all)"
+        ),
     )
     parser.add_argument(
         "--limit",
         type=int,
         default=None,
-        help="処理件数上限 (discover デフォルト: 50, scrape デフォルト: 3)",
+        help="処理件数上限 (discover/tags デフォルト: 50, scrape デフォルト: 3)",
     )
     parser.add_argument(
         "--overwrite",
@@ -408,5 +585,11 @@ if __name__ == "__main__":
         default=False,
         help="steam_ost_locked=TRUE のゲームも再試行する",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="tags フェーズで DB 書き込みを行わず抽出結果のみ表示する",
+    )
     args = parser.parse_args()
-    run(args.phase, args.limit, overwrite=args.overwrite)
+    run(args.phase, args.limit, overwrite=args.overwrite, dry_run=args.dry_run)

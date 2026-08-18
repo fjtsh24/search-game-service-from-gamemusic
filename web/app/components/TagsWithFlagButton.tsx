@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { authApi, Tag } from "@/app/lib/api";
+import { authApi, isEstimatedTag, ScoredTag } from "@/app/lib/api";
 
 type Props = {
-  tags: Tag[];
+  tags: ScoredTag[];
   gameId: string;
 };
 
@@ -28,13 +28,26 @@ export default function TagsWithFlagButton({ tags, gameId }: Props) {
 
   return (
     <div className="flex flex-wrap gap-2">
-      {tags.map((tag) => (
+      {tags.map((tag) => {
+        // 確信度の低いタグ（ゲームの雰囲気からの推定）は「推定」と明示する
+        const estimated = isEstimatedTag(tag);
+        return (
         <span key={tag.id} className="group relative flex items-center gap-1">
           <Link
             href={`/tags/${tag.id}`}
-            className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/60 hover:border-indigo-400/60 hover:bg-indigo-500/10 hover:text-white transition-colors"
+            title={
+              estimated
+                ? "ゲームの雰囲気から推定したタグです（音楽の情報から直接付与したものではありません）"
+                : undefined
+            }
+            className={`rounded-full border px-3 py-1 text-xs transition-colors hover:border-indigo-400/60 hover:bg-indigo-500/10 hover:text-white ${
+              estimated
+                ? "border-dashed border-white/15 text-white/40"
+                : "border-white/20 text-white/60"
+            }`}
           >
             # {tag.name_ja ?? tag.name}
+            {estimated && <span className="ml-1 text-[10px] text-white/30">推定</span>}
           </Link>
           {isLoggedIn && !flagged.has(tag.id) && (
             <button
@@ -50,7 +63,8 @@ export default function TagsWithFlagButton({ tags, gameId }: Props) {
             <span className="text-xs text-orange-400/60" title="報告を受け付けました">⚑</span>
           )}
         </span>
-      ))}
+        );
+      })}
     </div>
   );
 }

@@ -27,7 +27,7 @@ export type Game = {
   title_ja: string | null;
   release_year: number | null;
   cover_image_url: string | null;
-  game_tags?: { mood_tags: Tag }[];
+  game_tags?: { confidence?: number | null; mood_tags: Tag }[];
   reason_tags?: Tag[];
 };
 
@@ -36,6 +36,24 @@ export type Tag = {
   name: string;
   name_ja: string | null;
 };
+
+/**
+ * タグ 1 件と、その付与根拠の強さ（confidence）。
+ *
+ * confidence は付与ソースごとの証拠の強さを表す
+ * （docs/planning/08_tagging_redesign.md §6-A）:
+ *   0.9 前後 = 音楽そのものの記述に基づく直接証拠（Last.fm / Steam OST 説明文）
+ *   0.5 未満 = ゲームの雰囲気からの推定
+ * 推定タグは UI 上で「推定」と明示する。
+ */
+export type ScoredTag = Tag & { confidence?: number | null };
+
+/** これ未満の confidence を「推定タグ」として区別表示する閾値。 */
+export const ESTIMATED_TAG_THRESHOLD = 0.7;
+
+export function isEstimatedTag(tag: { confidence?: number | null }): boolean {
+  return tag.confidence != null && tag.confidence < ESTIMATED_TAG_THRESHOLD;
+}
 
 export type Track = {
   id: string;
@@ -53,7 +71,7 @@ export type GameDetail = Game & {
   steam_app_id: number | null;
   youtube_video_id: string | null;
   youtube_flagged: boolean;
-  game_tags: { tag_id: string; mood_tags: Tag }[];
+  game_tags: { tag_id: string; confidence: number | null; mood_tags: Tag }[];
   tracks: Track[];
 };
 
