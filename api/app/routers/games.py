@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from app import cache
 from app.db import get_db
 from app.services.similarity import similar_games_for
-from app.session import require_session
+from app.session import optional_session
 
 router = APIRouter()
 
@@ -29,22 +29,32 @@ async def list_games(
     if random:
         # 全件数を取得してランダムoffsetで limit 件だけ取得
         if tag_id:
-            count_result = (
-                db.table("game_tags")
-                .select("game_id", count="exact")
-                .eq("tag_id", tag_id)
-                .execute()
+            # タグに紐づく discoverable ゲームの ID を取得してからランダム抽出
+            tag_ids_result = (
+                db.table("game_tags").select("game_id").eq("tag_id", tag_id).execute()
             )
-            total = count_result.count or 0
-            offset = _random.randint(0, max(0, total - limit))
-            result = (
-                db.table("game_tags")
-                .select("game_id, games(id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja)))")
-                .eq("tag_id", tag_id)
-                .range(offset, offset + limit - 1)
-                .execute()
-            )
-            data = [row["games"] for row in result.data]
+            tag_game_ids = [r["game_id"] for r in (tag_ids_result.data or [])]
+            if not tag_game_ids:
+                data = []
+            else:
+                count_result = (
+                    db.table("games")
+                    .select("id", count="exact")
+                    .in_("id", tag_game_ids)
+                    .eq("is_discoverable", True)
+                    .execute()
+                )
+                total = count_result.count or 0
+                offset = _random.randint(0, max(0, total - limit))
+                result = (
+                    db.table("games")
+                    .select("id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja))")
+                    .in_("id", tag_game_ids)
+                    .eq("is_discoverable", True)
+                    .range(offset, offset + limit - 1)
+                    .execute()
+                )
+                data = result.data
         else:
             count_result = db.table("games").select("id", count="exact").eq("is_discoverable", True).execute()
             total = count_result.count or 0
@@ -60,14 +70,23 @@ async def list_games(
         _random.shuffle(data)
     else:
         if tag_id:
-            result = (
-                db.table("game_tags")
-                .select("game_id, games(id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja)))")
-                .eq("tag_id", tag_id)
-                .limit(limit)
-                .execute()
+            # タグに紐づく discoverable ゲームのみを返す（2ステップ）
+            tag_ids_result = (
+                db.table("game_tags").select("game_id").eq("tag_id", tag_id).execute()
             )
-            data = [row["games"] for row in result.data]
+            tag_game_ids = [r["game_id"] for r in (tag_ids_result.data or [])]
+            if not tag_game_ids:
+                data = []
+            else:
+                result = (
+                    db.table("games")
+                    .select("id, title, title_ja, release_year, cover_image_url, game_tags(mood_tags(id, name, name_ja))")
+                    .in_("id", tag_game_ids)
+                    .eq("is_discoverable", True)
+                    .limit(limit)
+                    .execute()
+                )
+                data = result.data
         else:
             result = (
                 db.table("games")
@@ -93,7 +112,7 @@ async def get_game(game_id: str):
         db.table("games")
         .select(
             "id, title, title_ja, description, description_ja, description_zh, release_year, cover_image_url, steam_app_id, youtube_video_id, youtube_flagged,"
-            "game_tags(tag_id, mood_tags(id, name, name_ja)),"
+            "game_tags(tag_id, confidence, mood_tags(id, name, name_ja)),"
             "tracks(id, title, track_number, duration_seconds, youtube_video_id,"
             "  track_composers(is_primary, composers(id, name)))"
         )
@@ -109,9 +128,10 @@ async def get_game(game_id: str):
 
 
 @router.post("/{game_id}/flag-video")
-async def flag_video(game_id: str, session: dict = Depends(require_session)):
+async def flag_video(game_id: str):
     """再生中の YouTube 動画が違うとユーザーが報告する。
     VideoID は即座には削除せず、games.youtube_flagged = TRUE をセットして管理者確認待ちにする。
+    非ログインユーザーも報告可能。
     """
     db = get_db()
     result = db.table("games").select("id").eq("id", game_id).execute()
@@ -128,19 +148,25 @@ class FlagTagRequest(BaseModel):
 
 
 @router.post("/{game_id}/flag-tag")
-async def flag_tag(game_id: str, body: FlagTagRequest, session: dict = Depends(require_session)):
+async def flag_tag(game_id: str, body: FlagTagRequest, session: dict | None = Depends(optional_session)):
     """タグが間違っているとユーザーが報告する。
     タグは即座には削除せず、game_tag_flags に記録して管理者確認待ちにする。
+    非ログインユーザーも報告可能（user_id は NULL で記録）。
     """
     db = get_db()
     result = db.table("games").select("id").eq("id", game_id).execute()
     if not result.data:
         raise HTTPException(status_code=404, detail="Game not found")
 
-    db.table("game_tag_flags").upsert(
-        {"game_id": game_id, "tag_id": body.tag_id, "user_id": session["user_id"]},
-        on_conflict="game_id,tag_id,user_id",
-    ).execute()
+    if session:
+        db.table("game_tag_flags").upsert(
+            {"game_id": game_id, "tag_id": body.tag_id, "user_id": session["user_id"]},
+            on_conflict="game_id,tag_id,user_id",
+        ).execute()
+    else:
+        db.table("game_tag_flags").insert(
+            {"game_id": game_id, "tag_id": body.tag_id},
+        ).execute()
     return {"flagged": True}
 
 

@@ -34,7 +34,7 @@ CREATE TABLE games (
 );
 
 COMMENT ON COLUMN games.steam_app_id     IS 'Steam ゲーム本体のappid（サントラDLC/Soundtrackのappidではない）。GetOwnedGames API と突合して user_games にマッチさせるために使用。';
-COMMENT ON COLUMN games.tags_locked      IS 'TRUE: Last.fm でタグが取得できないゲーム。日次バッチがスキップする。';
+COMMENT ON COLUMN games.tags_locked      IS 'TRUE: Last.fm でタグが取得できないゲーム。import_game_tags.py（Last.fm）専用のスキップフラグであり、「タグ付与不能」を意味しない。他ソース（steam_ost_desc 等）はこのフラグを参照せず、game_tags.added_by で処理済みを判定する。';
 COMMENT ON COLUMN games.youtube_locked   IS 'TRUE: YouTube で動画が見つからないゲーム。日次バッチがスキップする。';
 COMMENT ON COLUMN games.steam_ost_locked IS 'TRUE: Steam に Music アプリ（OST）が存在しないゲーム。discover フェーズがスキップする。';
 COMMENT ON COLUMN games.youtube_video_id IS 'OST 全体の YouTube 動画 ID。トラック単位の動画は tracks.youtube_video_id を参照。';
@@ -91,6 +91,9 @@ CREATE TABLE game_tags (
   PRIMARY KEY (game_id, tag_id)
 );
 
+COMMENT ON COLUMN game_tags.added_by   IS 'タグの付与元。system=Last.fm アルバムタグ / steam_ost_desc=Steam OST ストアページ説明文 / user=ユーザー手動。';
+COMMENT ON COLUMN game_tags.confidence IS '付与根拠の強さ。0.9 前後=音楽そのものの記述に基づく直接証拠、0.5 未満=ゲームの雰囲気からの推定。類似度計算で重みとして使う（api/app/services/similarity.py）。';
+
 
 CREATE TABLE composer_similarities (
   composer_id_a UUID  NOT NULL REFERENCES composers (id) ON DELETE CASCADE,
@@ -135,7 +138,7 @@ CREATE TABLE game_tag_flags (
   id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   game_id    UUID        NOT NULL REFERENCES games (id) ON DELETE CASCADE,
   tag_id     UUID        NOT NULL REFERENCES mood_tags (id) ON DELETE CASCADE,
-  user_id    UUID        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  user_id    UUID        REFERENCES users (id) ON DELETE CASCADE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (game_id, tag_id, user_id)
 );
@@ -245,8 +248,8 @@ CREATE POLICY "owner_insert" ON user_games FOR INSERT WITH CHECK (user_id = auth
 CREATE POLICY "owner_update" ON user_games FOR UPDATE USING (user_id = auth.uid());
 CREATE POLICY "owner_delete" ON user_games FOR DELETE USING (user_id = auth.uid());
 
-CREATE POLICY "owner_insert" ON game_tag_flags FOR INSERT WITH CHECK (user_id = auth.uid());
-CREATE POLICY "owner_read"   ON game_tag_flags FOR SELECT USING (user_id = auth.uid());
+CREATE POLICY "owner_insert" ON game_tag_flags FOR INSERT WITH CHECK (user_id IS NULL OR user_id = auth.uid());
+CREATE POLICY "owner_read"   ON game_tag_flags FOR SELECT USING (user_id IS NULL OR user_id = auth.uid());
 
 
 -- ── 初期データ（スキーマの一部として管理）────────────────────────────────────

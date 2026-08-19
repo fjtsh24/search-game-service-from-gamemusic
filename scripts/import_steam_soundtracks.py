@@ -36,6 +36,7 @@ Steam サウンドトラックを「高評価率」でフィルタして取得�
 """
 
 import argparse
+import html
 import re
 import time
 import os
@@ -106,7 +107,7 @@ def fetch_soundtrack_page(start: int) -> list[dict]:
         if m:
             results.append({
                 "appid": int(m.group(1)),
-                "title": item.get("name", "").strip(),
+                "title": html.unescape(item.get("name", "").strip()),
             })
     return results
 
@@ -202,11 +203,11 @@ def _fetch_appdetails(game_appid: int, lang: str) -> dict:
 
 _ALLOWED_APP_TYPES = {"game", ""}   # "game" または type 不明のものは通す
 
-def fetch_game_metadata(game_appid: int) -> tuple[str | None, str | None, str | None, int | None, str | None]:
-    """Steam appdetails から short_description (en/ja/zh)・release_year・type を取得。
+def fetch_game_metadata(game_appid: int) -> tuple[str | None, str | None, str | None, str | None, int | None, str | None]:
+    """Steam appdetails から short_description (en/ja/zh)・title_ja・release_year・type を取得。
 
     Returns:
-        (description_en, description_ja, description_zh, release_year, app_type)
+        (description_en, description_ja, description_zh, title_ja, release_year, app_type)
         app_type が "dlc" / "demo" / "advertising" 等の場合は登録をスキップすること。
     """
     en_data = _fetch_appdetails(game_appid, "english")
@@ -214,7 +215,7 @@ def fetch_game_metadata(game_appid: int) -> tuple[str | None, str | None, str | 
     app_type = en_data.get("type", "")
     if app_type not in _ALLOWED_APP_TYPES:
         # DLC・デモ等はここで早期リターン（ja/zh の API 呼び出しを省略）
-        return None, None, None, None, app_type
+        return None, None, None, None, None, app_type
 
     ja_data = _fetch_appdetails(game_appid, "japanese")
     zh_data = _fetch_appdetails(game_appid, "schinese")
@@ -229,6 +230,11 @@ def fetch_game_metadata(game_appid: int) -> tuple[str | None, str | None, str | 
     if description_zh == description_en:
         description_zh = None
 
+    # 日本語タイトル（英語タイトルと同一なら null）
+    en_name = en_data.get("name") or ""
+    ja_name = ja_data.get("name") or ""
+    title_ja = ja_name if ja_name and ja_name != en_name else None
+
     release_year = None
     release_date = en_data.get("release_date", {})
     if not release_date.get("coming_soon") and release_date.get("date"):
@@ -239,7 +245,7 @@ def fetch_game_metadata(game_appid: int) -> tuple[str | None, str | None, str | 
         except (ValueError, IndexError):
             pass
 
-    return description_en, description_ja, description_zh, release_year, app_type
+    return description_en, description_ja, description_zh, title_ja, release_year, app_type
 
 
 # ── DB 操作 ───────────────────────────────────────────────────────────────────
@@ -251,6 +257,7 @@ def upsert_game(
     description: str | None = None,
     description_ja: str | None = None,
     description_zh: str | None = None,
+    title_ja: str | None = None,
     release_year: int | None = None,
 ) -> str | None:
     """ゲームを upsert して game_id を返す。"""
@@ -261,6 +268,8 @@ def upsert_game(
         payload["description_ja"] = description_ja
     if description_zh:
         payload["description_zh"] = description_zh
+    if title_ja:
+        payload["title_ja"] = title_ja
     if release_year:
         payload["release_year"] = release_year
 
@@ -401,8 +410,8 @@ def run(limit: int, min_score: int) -> None:
             print(f"  skip: 既登録 (appid={game_appid})")
             continue
 
-        # ゲーム本体のメタデータ取得（説明文 en/ja/zh・リリース年・アプリ種別）
-        description, description_ja, description_zh, release_year, app_type = fetch_game_metadata(game_appid)
+        # ゲーム本体のメタデータ取得（説明文 en/ja/zh・title_ja・リリース年・アプリ種別）
+        description, description_ja, description_zh, title_ja, release_year, app_type = fetch_game_metadata(game_appid)
         if app_type not in _ALLOWED_APP_TYPES:
             print(f"  skip: type={app_type!r} — ゲーム本体ではないため除外")
             continue
@@ -412,11 +421,13 @@ def run(limit: int, min_score: int) -> None:
             print(f"  説明文(ja): {description_ja[:60]}…")
         if description_zh:
             print(f"  説明文(zh): {description_zh[:60]}…")
+        if title_ja:
+            print(f"  タイトル(ja): {title_ja}")
         if release_year:
             print(f"  リリース年: {release_year}")
 
         # ゲーム登録
-        game_id = upsert_game(title, game_appid, steam_cover_url(game_appid), description, description_ja, description_zh, release_year)
+        game_id = upsert_game(title, game_appid, steam_cover_url(game_appid), description, description_ja, description_zh, title_ja, release_year)
         if not game_id:
             print("  DB 登録失敗、スキップ")
             continue
@@ -443,9 +454,9 @@ def run_backfill(limit: int) -> None:
 
     rows = (
         db.table("games")
-        .select("id, title, steam_app_id, description, description_ja, description_zh")
+        .select("id, title, title_ja, steam_app_id, description, description_ja, description_zh")
         .not_.is_("steam_app_id", "null")
-        .or_("description.is.null,description_ja.is.null,description_zh.is.null")
+        .or_("description.is.null,description_ja.is.null,description_zh.is.null,title_ja.is.null")
         .order("updated_at", desc=False)
         .limit(limit)
         .execute()
@@ -464,7 +475,7 @@ def run_backfill(limit: int) -> None:
         steam_app_id = game["steam_app_id"]
         print(f"[{i}/{len(rows)}] {title} (appid={steam_app_id})")
 
-        desc_en, desc_ja, desc_zh, release_year, app_type = fetch_game_metadata(steam_app_id)
+        desc_en, desc_ja, desc_zh, title_ja_new, release_year, app_type = fetch_game_metadata(steam_app_id)
         if app_type not in _ALLOWED_APP_TYPES:
             print(f"  skip: type={app_type!r} — ゲーム本体ではないため除外")
             continue
@@ -476,12 +487,14 @@ def run_backfill(limit: int) -> None:
             payload["description_ja"] = desc_ja
         if game.get("description_zh") is None and desc_zh:
             payload["description_zh"] = desc_zh
+        if game.get("title_ja") is None and title_ja_new:
+            payload["title_ja"] = title_ja_new
         if game.get("release_year") is None and release_year:
             payload["release_year"] = release_year
 
         if payload:
             db.table("games").update(payload).eq("id", game["id"]).execute()
-            filled = [k for k in ("description", "description_ja", "description_zh", "release_year") if k in payload]
+            filled = [k for k in ("description", "description_ja", "description_zh", "title_ja", "release_year") if k in payload]
             print(f"  → 更新: {', '.join(filled)}")
             updated += 1
         else:

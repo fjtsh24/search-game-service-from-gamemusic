@@ -40,7 +40,8 @@ def make_db(tables: dict | None = None) -> MagicMock:
 
         # チェーン可能なメソッドはすべて self を返す
         for method in ("select", "eq", "neq", "is_", "not_", "in_",
-                       "ilike", "limit", "order", "gte", "update", "insert", "delete"):
+                       "ilike", "or_", "filter", "range", "limit", "order",
+                       "gte", "gt", "lte", "lt", "update", "insert", "upsert", "delete"):
             getattr(t, method).return_value = t
 
         # .single() は data が先頭要素 or None のレスポンスを返す

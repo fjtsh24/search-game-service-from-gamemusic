@@ -26,7 +26,11 @@ export default async function GamePage({ params }: { params: Promise<{ id: strin
   if (!game) notFound();
 
   const description = pickDescription(game, acceptLang);
-  const tags = game.game_tags?.map((gt) => gt.mood_tags).filter(Boolean) ?? [];
+  // confidence をタグに載せて渡す（推定タグを UI で区別するため）
+  const tags =
+    game.game_tags
+      ?.filter((gt) => gt.mood_tags)
+      .map((gt) => ({ ...gt.mood_tags, confidence: gt.confidence })) ?? [];
   const composers = game.tracks
     ?.flatMap((t) => t.track_composers?.map((tc) => tc.composers) ?? [])
     .filter(Boolean)

@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     session_secret: str = "dev-secret-change-in-production"
     frontend_url: str = "http://localhost:3000"
     environment: str = "development"
+    sentry_dsn: str | None = None
 
     class Config:
         env_file = str(_ROOT / ".env")
