@@ -34,7 +34,7 @@ CREATE TABLE games (
 );
 
 COMMENT ON COLUMN games.steam_app_id     IS 'Steam ゲーム本体のappid（サントラDLC/Soundtrackのappidではない）。GetOwnedGames API と突合して user_games にマッチさせるために使用。';
-COMMENT ON COLUMN games.tags_locked      IS 'TRUE: Last.fm でタグが取得できないゲーム。import_game_tags.py（Last.fm）専用のスキップフラグであり、「タグ付与不能」を意味しない。他ソース（steam_ost_desc 等）はこのフラグを参照せず、game_tags.added_by で処理済みを判定する。';
+COMMENT ON COLUMN games.tags_locked      IS 'TRUE: Last.fm でタグが取得できないゲーム。import_game_tags.py（Last.fm）専用のスキップフラグであり、「タグ付与不能」を意味しない。他ソース（steam_ost_desc 等）はこのフラグを参照せず、game_tag_attempts で処理済みを判定する。';
 COMMENT ON COLUMN games.youtube_locked   IS 'TRUE: YouTube で動画が見つからないゲーム。日次バッチがスキップする。';
 COMMENT ON COLUMN games.steam_ost_locked IS 'TRUE: Steam に Music アプリ（OST）が存在しないゲーム。discover フェーズがスキップする。';
 COMMENT ON COLUMN games.youtube_video_id IS 'OST 全体の YouTube 動画 ID。トラック単位の動画は tracks.youtube_video_id を参照。';
@@ -146,6 +146,20 @@ CREATE TABLE game_tag_flags (
 COMMENT ON TABLE game_tag_flags IS 'ユーザーが「このタグは間違い」と報告した記録。即時削除せず管理者確認待ち。';
 
 
+CREATE TABLE game_tag_attempts (
+  game_id      UUID        NOT NULL REFERENCES games (id) ON DELETE CASCADE,
+  source       TEXT        NOT NULL,
+  result       TEXT        NOT NULL CHECK (result IN ('tagged', 'no_match', 'invalid', 'error')),
+  detail       TEXT,
+  attempted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (game_id, source)
+);
+
+COMMENT ON TABLE  game_tag_attempts        IS 'タグ抽出バッチの「このゲームをこのソースで試した」記録。game_tags に行が増えたかどうかとは独立に残すため、タグが1件も付かなかったゲームを日次バッチが毎日再取得し続けるのを防ぐ。';
+COMMENT ON COLUMN game_tag_attempts.source IS 'タグ抽出元。game_tags.added_by と同じ値を使う（steam_ost_desc / youtube_desc）。';
+COMMENT ON COLUMN game_tag_attempts.result IS 'tagged=タグ付与成功 / no_match=説明文は取れたがムード語なし / invalid=入力が対象外（動画の検証NG等） / error=通信・API失敗。tagged・no_match・invalid は恒久スキップ、error のみ一定期間後に再試行する。';
+COMMENT ON COLUMN game_tag_attempts.detail IS '再試行判断とログ調査のための補足（invalid の理由、error のステータス等）。';
+
 -- ── インデックス ───────────────────────────────────────────────────────────────
 
 CREATE INDEX idx_games_steam_app_id       ON games (steam_app_id);
@@ -154,6 +168,7 @@ CREATE INDEX idx_composers_name           ON composers USING gin (to_tsvector('s
 CREATE INDEX idx_tracks_game_id           ON tracks (game_id);
 CREATE INDEX idx_track_composers_composer_id ON track_composers (composer_id);
 CREATE INDEX idx_game_tags_tag_id         ON game_tags (tag_id);
+CREATE INDEX idx_game_tag_attempts_source ON game_tag_attempts (source, result, attempted_at);
 CREATE INDEX idx_game_tag_flags_game_id   ON game_tag_flags (game_id);
 CREATE INDEX idx_game_tag_flags_tag_id    ON game_tag_flags (tag_id);
 CREATE INDEX idx_composer_sim_a_score     ON composer_similarities (composer_id_a, score DESC);
@@ -233,6 +248,8 @@ ALTER TABLE users               ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_games          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE system_settings     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE game_tag_flags      ENABLE ROW LEVEL SECURITY;
+-- game_tag_attempts はバッチ専用（service role のみ）。公開ポリシーを作らず全拒否のままにする。
+ALTER TABLE game_tag_attempts   ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "public_read" ON games               FOR SELECT USING (true);
 CREATE POLICY "public_read" ON composers           FOR SELECT USING (true);

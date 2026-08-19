@@ -188,7 +188,7 @@ Tier 2 は「Tier 1 が取れなかったときの下地」。Tier 1 が後か�
 既存の `steam_ost_locked` / `youtube_locked` と同じ粒度に揃える。最小の変更:
 
 - `tags_locked` は **Last.fm 専用フラグ**として意味を確定（コメント修正のみ、データ移行不要）
-- 新スクリプトは `tags_locked` を参照せず、`game_tags.added_by` に自分のソース名の行があるかで処理済み判定する
+- 新スクリプトは `tags_locked` を参照せず、`game_tags.added_by` に自分のソース名の行があるかで処理済み判定する（→ **§12 で撤回**。タグが付かなかったゲームを判定できず日次バッチが空回りしたため、`game_tag_attempts` に置き換えた）
 - `games.steam_tags_scraped_at TIMESTAMPTZ` を追加（Steam タグの再取得管理用）
 
 ---
@@ -334,3 +334,51 @@ DELTARUNE   : "Crash! Bang! Boom! It's the music of DELTARUNE!"
 - うちタグ抽出成功: 36件（36%）
 
 214件全体に対する見込みは **約40件** のタグ新規付与（追加のカバレッジ改善は 6.2%→22.3% に対してさらに +数%程度）。小サンプル15件で実行し、DB書き込みを確認済み。
+
+---
+
+## 12. 処理済み判定を `game_tag_attempts` に置き換え（2026-08-19）
+
+### 経緯
+
+「日次バッチの説明文タグ付与が毎日同じ対象で走り続けている」との指摘を受けて調査した。
+
+### 判明したこと
+
+**(1) 本番（main）で旧ステップが動き続けていた。**
+スケジュール実行が参照するのは `main` の workflow。`main` には §10 で廃止したはずの
+`Step 1b — 説明文タグ付与（100件）` → `scripts/import_description_tags.py` が残っており、
+`develop` の刷新分が `main` に届いていなかった。Actions のログ 3 日分（16時間前 / 1日前 / 4日前）で
+処理対象 100 件が完全に一致し、いずれも「完了: 0 ゲームに計 0 タグ追加」。
+
+**(2) 後継スクリプトも同じ構造欠陥を持っていた。**
+§6-C で決めた「`game_tags.added_by` に自分のソース名の行があるか」で処理済みを判定する方式は、
+**タグが 1 件も付かなかったゲームを「未処理」と見なし続ける**。ソート順が `created_at` 昇順のため、
+そうしたゲームがキュー先頭を恒久的に占有し、日次バッチが毎日同じ説明文を取り直す。
+
+実測（2026-08-19 本番DB）:
+
+| ステップ | 候補 | 付与済 | 毎日再処理される滞留分 | 到達不能になるゲーム |
+|---|---|---|---|---|
+| Step 5b（`steam_ost_desc`） | 117 | 59 | 58 | `--limit 50` 超過分の 8 件 |
+| Step 3c（`youtube_desc`） | 310 | 4 | 306 | 候補取得が `limit*3=150` 件打ち切りのため 151 件目以降すべて |
+
+### 実装したもの
+
+- `supabase/schema.sql`: `game_tag_attempts (game_id, source, result, detail, attempted_at)` を追加。
+  `result` は `tagged` / `no_match` / `invalid` / `error`。前 3 つは恒久スキップ、`error`（通信・API 失敗）のみ
+  `RETRY_ERROR_AFTER_DAYS`（既定 7 日）後に再試行する。バッチ専用のため RLS は有効・公開ポリシーなし。
+- `scripts/tag_attempts.py`（新規）: `load_skip_ids()` / `record()` / `paged()`。
+  `load_skip_ids()` は移行用に「既存の `game_tags.added_by` 行があるゲーム」もスキップ扱いにするので、
+  過去に成功済みのゲームを叩き直すことはなく、データ移行は不要。
+- `import_steam_ost_data.py --phase tags`: 失敗理由を `_FetchFailure(result, detail)` で持ち上げ、
+  appdetails の `success=false` は `invalid`（再試行しても変わらない）、通信・HTTP・JSON 失敗は `error` に分類。
+- `import_youtube_video_ids.py --mode tags`: `_fetch_videos_meta()` が「リクエスト自体が失敗した videoId」を
+  別に返すようにし、**200 応答に含まれなかった動画（削除・非公開）＝ `invalid`** と
+  **`videos.list` の失敗＝`error`** を区別。候補取得の `limit*3` 打ち切りは全件取得に変更。
+- 併せて、処理済み集合の取得を `paged()` 経由にして PostgREST の 1 リクエスト上限（既定 1000 行）超えに対応。
+- `scripts/test_tag_attempts.py`（新規、標準ライブラリのみ）＋ CI の scripts ジョブに追加。
+
+### 残作業
+
+`main` はまだ旧 Step 1b を含むため、`develop` → `main` のリリースまで空回りは止まらない。
