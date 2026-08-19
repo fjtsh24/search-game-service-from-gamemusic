@@ -17,6 +17,7 @@ on:
           - steam
           - steam_tag_search
           - game_tags
+          - ost_tags
           - lastfm_similarities
       limit:
         description: '処理件数の上限'
@@ -53,8 +54,6 @@ jobs:
       - name: Step 1 — ゲームタグ付与（40件、locked スキップ）
         run: python3 scripts/import_game_tags.py --limit 40
 
-      - name: Step 1b — 説明文タグ付与（100件、tags_locked ゲーム対象）
-        run: python3 scripts/import_description_tags.py --limit 100
 
       - name: Step 2 — Steam 説明文バックフィル（30件）
         run: python3 scripts/import_steam_soundtracks.py --backfill --limit 30
@@ -73,6 +72,9 @@ jobs:
 
       - name: Step 5 — Steam OST appID 発見（50件、APIベース）
         run: python3 scripts/import_steam_ost_data.py --phase discover --limit 50
+
+      - name: Step 5b — OST 説明文からムードタグ付与（50件、APIベース）
+        run: python3 scripts/import_steam_ost_data.py --phase tags --limit 50
 
       - name: Step 6 — Steam OST ページ取得（10件、2分間隔）
         timeout-minutes: 30
@@ -237,6 +239,27 @@ jobs:
         run: |
           LIMIT=${{ inputs.limit || '200' }}
           python3 scripts/import_game_tags.py --limit "${LIMIT}"
+
+  ost_tags:
+    name: Steam OST 説明文からムードタグ付与
+    if: github.event_name == 'workflow_dispatch' && inputs.job == 'ost_tags'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: scripts/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Run OST description tag import
+        run: |
+          LIMIT=${{ inputs.limit || '100' }}
+          python3 scripts/import_steam_ost_data.py --phase tags --limit "${LIMIT}"
 
   lastfm_similarities:
     name: Last.fm 作曲家間類似度更新

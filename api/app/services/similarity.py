@@ -1,8 +1,23 @@
 """
-VibeTag Jaccard係数によるゲーム類似度計算。
+VibeTag 重み付き Jaccard 係数によるゲーム類似度計算。
 
-類似度スコア = |タグA ∩ タグB| / |タグA ∪ タグB|
-同一作曲家ボーナス: 共有作曲家ごとに +0.2（上限 0.4）を Jaccard スコアに加算。
+タグは付与ソースごとに証拠の強さが異なる（docs/planning/08_tagging_redesign.md §6-A）:
+
+  Tier 1（confidence 0.9）: 音楽そのものの記述に基づく直接証拠
+      - Last.fm アルバムタグ（added_by='system'）
+      - Steam OST 説明文（added_by='steam_ost_desc'）
+  Tier 2（confidence 0.4 前後）: ゲームの雰囲気からの推定
+
+これを無視して素の集合で Jaccard を取ると、推定タグが直接証拠と同じ重みを持ち
+類似度の質が落ちる。そのため confidence を重みとした Jaccard を用いる:
+
+    score = Σ_{t ∈ A∩B} min(conf_A[t], conf_B[t])
+          / Σ_{t ∈ A∪B} max(conf_A[t], conf_B[t])
+
+すべての confidence が 1.0 のときは |A ∩ B| / |A ∪ B| と一致するため、
+重みなしの Jaccard の自然な一般化になっている。
+
+同一作曲家ボーナス: 共有作曲家ごとに +0.2（上限 0.4）をスコアに加算。
 
 作曲家間類似度（composer_similarities）は get_feed のレコメンドブーストに使用する。
 """
@@ -15,15 +30,58 @@ _COMPOSER_BONUS = 0.2
 _MAX_COMPOSER_BONUS = 0.4
 
 
+def _as_weights(tags) -> dict:
+    """タグ集合／{tag_id: confidence} 辞書のどちらでも受け取り、重み辞書に正規化する。
+
+    集合で渡された場合はすべて confidence=1.0 とみなす（重みなし Jaccard と等価）。
+    """
+    if isinstance(tags, dict):
+        return tags
+    return {t: 1.0 for t in tags}
+
+
+def _normalize_confidence(raw) -> float:
+    """DB から読んだ confidence 値を float に丸め、[0.0, 1.0] にクランプする。
+
+    game_tags.confidence は NOT NULL DEFAULT 1.0 のスキーマ制約があるため
+    通常 NULL は入らないが、PostgREST 経由の値が None / 文字列など
+    想定外の型で来た場合にも Jaccard 計算が壊れないよう防御的に変換する。
+    """
+    if raw is None:
+        return 1.0
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 1.0
+    return max(0.0, min(1.0, value))
+
+
 def compute_similarity_score(
-    target_tags: set,
-    candidate_tags: set,
+    target_tags,
+    candidate_tags,
     target_composers: set,
     candidate_composers: set,
 ) -> float:
-    """Jaccard係数 + 同一作曲家ボーナスで類似度スコアを計算する（純粋関数）。"""
-    union = target_tags | candidate_tags
-    jaccard = len(target_tags & candidate_tags) / len(union) if union else 0.0
+    """重み付き Jaccard 係数 + 同一作曲家ボーナスで類似度を計算する（純粋関数）。
+
+    target_tags / candidate_tags は set でも {tag_id: confidence} でも受け取れる。
+    set の場合は全タグの confidence を 1.0 として扱う。
+    """
+    a = _as_weights(target_tags)
+    b = _as_weights(candidate_tags)
+
+    union = a.keys() | b.keys()
+    if not union:
+        jaccard = 0.0
+    else:
+        numerator = sum(
+            min(a[t], b[t]) for t in (a.keys() & b.keys())
+        )
+        denominator = sum(
+            max(a.get(t, 0.0), b.get(t, 0.0)) for t in union
+        )
+        jaccard = numerator / denominator if denominator else 0.0
+
     shared_composers = target_composers & candidate_composers
     bonus = min(len(shared_composers) * _COMPOSER_BONUS, _MAX_COMPOSER_BONUS)
     return jaccard + bonus
@@ -60,17 +118,20 @@ async def similar_games_for(game_id: str, limit: int = 8) -> list[dict]:
     # 対象ゲームのタグを取得
     tag_result = (
         db.table("game_tags")
-        .select("tag_id")
+        .select("tag_id, confidence")
         .eq("game_id", game_id)
         .execute()
     )
-    target_tags = {row["tag_id"] for row in (tag_result.data or [])}
+    target_tags = {
+        row["tag_id"]: _normalize_confidence(row.get("confidence"))
+        for row in (tag_result.data or [])
+    }
 
     # 同じタグを持つゲームをまとめて取得
     candidates_result = (
         db.table("game_tags")
         .select("game_id, tag_id")
-        .in_("tag_id", list(target_tags))
+        .in_("tag_id", list(target_tags.keys()))
         .neq("game_id", game_id)
         .execute()
     ) if target_tags else None
@@ -119,13 +180,13 @@ async def similar_games_for(game_id: str, limit: int = 8) -> list[dict]:
     candidate_ids = list(game_shared.keys())
     all_tags_result = (
         db.table("game_tags")
-        .select("game_id, tag_id")
+        .select("game_id, tag_id, confidence")
         .in_("game_id", candidate_ids)
         .execute()
     )
-    game_all_tags: dict[str, set] = defaultdict(set)
+    game_all_tags: dict[str, dict] = defaultdict(dict)
     for row in (all_tags_result.data or []):
-        game_all_tags[row["game_id"]].add(row["tag_id"])
+        game_all_tags[row["game_id"]][row["tag_id"]] = _normalize_confidence(row.get("confidence"))
 
     scores: list[tuple[float, str]] = []
     for gid in game_shared:

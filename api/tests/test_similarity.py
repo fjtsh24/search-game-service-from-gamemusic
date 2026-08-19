@@ -6,7 +6,7 @@ compute_similarity_score は純粋関数なので DB モック不要。
 
 import pytest
 
-from app.services.similarity import compute_similarity_score
+from app.services.similarity import _normalize_confidence, compute_similarity_score
 
 
 class TestComputeSimilarityScore:
@@ -50,6 +50,88 @@ class TestComputeSimilarityScore:
     def test_no_composer_overlap_no_bonus(self):
         score = compute_similarity_score({"epic"}, {"epic"}, {"c1"}, {"c2"})
         assert score == pytest.approx(1.0)
+
+
+class TestWeightedJaccard:
+    """confidence を重みとした Jaccard の挙動（docs/planning/08_tagging_redesign.md §6-B）。"""
+
+    def test_dict_with_all_confidence_one_matches_set_behavior(self):
+        # 重みがすべて 1.0 なら従来の集合ベース Jaccard と一致する
+        as_set = compute_similarity_score({"a", "b", "c"}, {"b", "c", "d"}, set(), set())
+        as_dict = compute_similarity_score(
+            {"a": 1.0, "b": 1.0, "c": 1.0},
+            {"b": 1.0, "c": 1.0, "d": 1.0},
+            set(), set(),
+        )
+        assert as_dict == pytest.approx(as_set)
+
+    def test_low_confidence_shared_tag_scores_lower(self):
+        # 同じ1タグを共有していても、確信度が低い側のペアはスコアが低くなる
+        strong = compute_similarity_score({"a": 0.9}, {"a": 0.9}, set(), set())
+        weak = compute_similarity_score({"a": 0.4}, {"a": 0.4}, set(), set())
+        # 完全一致同士は比率が同じなので 1.0 になる
+        assert strong == pytest.approx(1.0)
+        assert weak == pytest.approx(1.0)
+
+        # 片方だけ確信度が低い場合は min/max により減点される
+        mixed = compute_similarity_score({"a": 0.9}, {"a": 0.4}, set(), set())
+        assert mixed == pytest.approx(0.4 / 0.9)
+        assert mixed < strong
+
+    def test_low_confidence_extra_tag_dilutes_less_than_high_confidence(self):
+        # 非共有タグの確信度が低いほど、分母への寄与が小さく減点が軽い
+        weak_extra = compute_similarity_score(
+            {"a": 0.9}, {"a": 0.9, "b": 0.4}, set(), set()
+        )
+        strong_extra = compute_similarity_score(
+            {"a": 0.9}, {"a": 0.9, "b": 0.9}, set(), set()
+        )
+        assert weak_extra == pytest.approx(0.9 / 1.3)
+        assert strong_extra == pytest.approx(0.5)
+        assert weak_extra > strong_extra
+
+    def test_tier1_pair_outranks_tier2_pair_with_same_tags(self):
+        # 直接証拠どうしのペアが、推定タグどうしのペアより上に来る
+        tier1 = compute_similarity_score(
+            {"a": 0.9, "b": 0.9}, {"a": 0.9, "c": 0.9}, set(), set()
+        )
+        mixed = compute_similarity_score(
+            {"a": 0.9, "b": 0.9}, {"a": 0.4, "c": 0.4}, set(), set()
+        )
+        assert mixed < tier1
+
+    def test_empty_dicts_return_zero(self):
+        assert compute_similarity_score({}, {}, set(), set()) == pytest.approx(0.0)
+
+    def test_composer_bonus_still_applies_with_weights(self):
+        score = compute_similarity_score({"a": 0.4}, {"b": 0.4}, {"c1"}, {"c1"})
+        assert score == pytest.approx(0.2)
+
+
+class TestNormalizeConfidence:
+    """DB から読んだ confidence 値の正規化（PRレビュー指摘: 型不整合・範囲外への防御）。"""
+
+    def test_none_defaults_to_one(self):
+        assert _normalize_confidence(None) == pytest.approx(1.0)
+
+    def test_valid_float_passes_through(self):
+        assert _normalize_confidence(0.4) == pytest.approx(0.4)
+
+    def test_string_number_is_converted(self):
+        # PostgREST/ドライバの都合で数値が文字列で来るケースへの防御
+        assert _normalize_confidence("0.7") == pytest.approx(0.7)
+
+    def test_non_numeric_string_defaults_to_one(self):
+        assert _normalize_confidence("not-a-number") == pytest.approx(1.0)
+
+    def test_out_of_range_high_is_clamped(self):
+        assert _normalize_confidence(1.5) == pytest.approx(1.0)
+
+    def test_out_of_range_negative_is_clamped(self):
+        assert _normalize_confidence(-0.3) == pytest.approx(0.0)
+
+    def test_int_is_accepted(self):
+        assert _normalize_confidence(1) == pytest.approx(1.0)
 
 
 class TestSimilarGamesFor:

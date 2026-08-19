@@ -112,7 +112,7 @@ async def get_game(game_id: str):
         db.table("games")
         .select(
             "id, title, title_ja, description, description_ja, description_zh, release_year, cover_image_url, steam_app_id, youtube_video_id, youtube_flagged,"
-            "game_tags(tag_id, mood_tags(id, name, name_ja)),"
+            "game_tags(tag_id, confidence, mood_tags(id, name, name_ja)),"
             "tracks(id, title, track_number, duration_seconds, youtube_video_id,"
             "  track_composers(is_primary, composers(id, name)))"
         )
