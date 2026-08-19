@@ -24,9 +24,18 @@ _BAD_WORD_RE = re.compile(
 _TRAILER_RE = re.compile(r"(trailer|announcement|teaser)", re.IGNORECASE)
 
 MIN_DURATION_SECONDS = 90
-# 「作業用BGMミックス」等、ゲームのフルOSTとしては不自然に長い動画を弾く上限。
-# 実測した正常な OST 動画の最長は約68分（4056秒）だったため、3時間を安全マージンとする。
-MAX_DURATION_SECONDS = 3 * 60 * 60
+# 「作業用BGMミックス」等、無関係な動画を弾くための尺の上限。
+# タイトルに OST 語が無い動画にのみ適用する。
+#
+# 全310件の実測で、OST語を含まない長時間動画（AQUARIUM 12h、拖拖拉拉小菲镇 11.3h、
+# Alpaca Stacka 10.4h）は全て無関係な動画だった一方、OST語を含む長時間動画
+# （The Witcher 3 "FULL Soundtrack + DLC" 3.6h、Portal 2 "OST Full 3 parts" 3.4h、
+# Denshattack! 3.8h 等）は大作 RPG や DLC 込みの正規フル OST だった。
+# 尺だけで判定すると後者を誤って弾いてしまうため、OST語の有無で上限を分ける。
+MAX_DURATION_SECONDS_NO_OST_WORD = 3 * 60 * 60
+# OST語がある場合の上限。実測した OST語ありの最長は 3.8h（Denshattack!）だったため
+# 十分な安全マージンを取る。24時間耐久配信のような極端なケースだけを弾く想定。
+MAX_DURATION_SECONDS_WITH_OST_WORD = 8 * 60 * 60
 
 
 def parse_iso8601_duration(iso: str | None) -> int:
@@ -88,7 +97,10 @@ def is_valid_ost_video(
         return False, "トレーラー系のタイトル"
     if duration_seconds < MIN_DURATION_SECONDS:
         return False, f"尺が短すぎる（{duration_seconds}秒）"
-    if duration_seconds > MAX_DURATION_SECONDS:
+    max_duration = (
+        MAX_DURATION_SECONDS_WITH_OST_WORD if has_ost_word else MAX_DURATION_SECONDS_NO_OST_WORD
+    )
+    if duration_seconds > max_duration:
         return False, f"尺が長すぎる（{duration_seconds}秒） — 作業用BGMミックス等の可能性"
 
     is_music = (

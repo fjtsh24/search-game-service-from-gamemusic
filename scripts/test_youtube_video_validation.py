@@ -100,6 +100,53 @@ class TestIsValidOstVideo(unittest.TestCase):
         self.assertFalse(valid)
         self.assertIn("長すぎる", reason)
 
+    def test_long_but_legitimate_full_ost_with_dlc_is_accepted(self):
+        # The Witcher 3 の実例: DLC込みのフルサントラは3.6時間あるが、
+        # タイトルに OST 語（"Soundtrack"）があるため長時間動画向けの上限（8時間）を適用し、
+        # 3時間の上限で誤って弾かないことを確認する。
+        valid, _ = is_valid_ost_video(
+            game_title="The Witcher 3: Wild Hunt",
+            video_title="The Witcher 3  Wild Hunt  FULL Soundtrack + DLC",
+            channel_title="Some Channel",
+            category_id=None,
+            topic_categories=["Video_game_culture"],
+            duration_seconds=int(3.6 * 3600),
+        )
+        self.assertTrue(valid)
+
+    def test_long_legitimate_ost_examples_from_production_audit(self):
+        # 2026-08-19 の本番DB全310件調査で見つかった、OST語ありで3時間を超える
+        # 正規動画の実例（Portal 2 / Summer Pockets / Denshattack!）が全て通ることを確認する。
+        cases = [
+            ("Portal 2", "Portal 2 OST (Full 3 parts)", int(3.4 * 3600)),
+            ("Summer Pockets", "Summer Pockets OST", int(3.1 * 3600)),
+            ("Denshattack!", "Denshattack! Original Soundtrack", int(3.8 * 3600)),
+        ]
+        for game_title, video_title, duration in cases:
+            with self.subTest(game=game_title):
+                valid, reason = is_valid_ost_video(
+                    game_title=game_title,
+                    video_title=video_title,
+                    channel_title="Some Channel",
+                    category_id=None,
+                    topic_categories=[],
+                    duration_seconds=duration,
+                )
+                self.assertTrue(valid, f"{game_title} should be valid but got: {reason}")
+
+    def test_extremely_long_video_rejected_even_with_ost_word(self):
+        # OST 語があっても、24時間耐久配信のような極端な長さは弾く（8時間上限）
+        valid, reason = is_valid_ost_video(
+            game_title="Some Game",
+            video_title="Some Game Full Soundtrack Marathon Stream",
+            channel_title="Some Channel",
+            category_id=None,
+            topic_categories=[],
+            duration_seconds=24 * 3600,
+        )
+        self.assertFalse(valid)
+        self.assertIn("長すぎる", reason)
+
     def test_no_music_evidence_rejected(self):
         valid, reason = is_valid_ost_video(
             game_title="Mount & Blade: Warband",
