@@ -12,9 +12,19 @@ YouTube Data API v3 でゲームサントラ / トラック別の VideoID を取
     汎用的なトラック名（"Track 1" 等）はスキップ。
     両方のキーワードが動画タイトルに含まれるか厳格に検証する。
 
+  --mode tags
+    games.youtube_video_id が設定済みのゲームを対象に、動画のタイトル・説明文から
+    mood タグを抽出して game_tags に保存する（added_by='youtube_desc'）。
+    videos.list（50件/リクエスト=1 unit）でメタ取得し、youtube_video_validation.py の
+    判定（ゲーム名一致・尺90秒〜3時間・実況/トレーラー除外）を通った動画のみを対象にする。
+    tags_locked / steam_ost_appid の有無は問わない（このモードは動画メタデータのみ参照）。
+    詳細: docs/planning/08_tagging_redesign.md §11
+
 YouTube Data API は 1 クエリ = 100 units / 1 日の無料枠 = 10,000 units。
+videos.list は 50 件/リクエスト = 1 unit と非常に安い。
   - games モード: 日次 20 件 = 2,000 units
   - tracks モード: 日次 10 件 = 1,000 units
+  - tags モード: 日次 50 件 ≈ 1 unit（videos.list のみ、search は使わない）
   合計 3,000 units/日 で余裕を保つ。
 
 使い方:
@@ -30,6 +40,9 @@ import re
 import time
 import requests
 from dotenv import load_dotenv
+
+from music_text_tags import extract_tags
+from youtube_video_validation import is_valid_ost_video, parse_iso8601_duration
 
 load_dotenv()
 
@@ -239,9 +252,140 @@ def run_tracks(limit: int) -> None:
     print(f"消費クォータ: 約 {len(tracks) * 100} units")
 
 
+YOUTUBE_VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
+
+TAGS_SOURCE = "youtube_desc"
+TAGS_CONFIDENCE = 0.75  # Steam OST 説明文（0.9）より低め。動画の誤登録を完全には排除できないため
+
+
+def get_games_for_tag_extraction(limit: int) -> list[dict]:
+    """youtube_video_id が設定済みで、まだ youtube_desc タグを試みていないゲームを取得する。"""
+    done_rows = (
+        db.table("game_tags")
+        .select("game_id")
+        .eq("added_by", TAGS_SOURCE)
+        .execute()
+        .data or []
+    )
+    already_done = {r["game_id"] for r in done_rows}
+
+    rows = (
+        db.table("games")
+        .select("id, title, youtube_video_id")
+        .not_.is_("youtube_video_id", "null")
+        .order("created_at", desc=False)
+        .limit(limit * 3)  # 処理済み除外後に limit 件残るよう多めに取得
+        .execute()
+        .data or []
+    )
+    candidates = [r for r in rows if r["id"] not in already_done]
+    return candidates[:limit]
+
+
+def _fetch_videos_meta(video_ids: list[str]) -> dict[str, dict]:
+    """videos.list で複数動画のメタデータをまとめて取得する（50件/リクエスト = 1 unit）。"""
+    meta: dict[str, dict] = {}
+    for i in range(0, len(video_ids), 50):
+        chunk = video_ids[i:i + 50]
+        resp = http.get(YOUTUBE_VIDEOS_URL, params={
+            "part": "snippet,topicDetails,contentDetails",
+            "id": ",".join(chunk),
+            "key": YOUTUBE_API_KEY,
+        }, timeout=15)
+        if resp.status_code != 200:
+            print(f"  videos.list エラー: {resp.status_code} {resp.text[:100]}")
+            continue
+        for item in resp.json().get("items", []):
+            meta[item["id"]] = item
+    return meta
+
+
+def run_tags(limit: int) -> None:
+    """games.youtube_video_id の動画タイトル・説明文から mood タグを抽出する。
+
+    youtube_video_validation.is_valid_ost_video() で妥当そうと判定された動画のみを
+    対象にする（issue #105 で実測した「実況・トレーラー・尺異常」を除外するルール）。
+    誤登録の動画（例: 無関係な作業用BGMミックス）からタグを抽出すると
+    ノイズになるため、検証をスキップしない。
+    """
+    print(f"YouTube 動画メタからムードタグ抽出 (上限: {limit} 件)")
+
+    games = get_games_for_tag_extraction(limit)
+    if not games:
+        print("対象ゲームはありません。")
+        return
+
+    meta = _fetch_videos_meta([g["youtube_video_id"] for g in games])
+    print(f"{len(games)} 件を処理します（videos.list {(len(games) + 49) // 50} 回 = 同units消費）...\n")
+
+    tag_rows = db.table("mood_tags").select("id, name").execute().data or []
+    tag_id_map = {r["name"]: r["id"] for r in tag_rows}
+
+    tagged = 0
+    invalid = 0
+    no_match = 0
+
+    for game in games:
+        title = game["title"]
+        item = meta.get(game["youtube_video_id"])
+        if not item:
+            print(f"  [{title}] 動画メタ取得不可（削除・非公開の可能性）")
+            continue
+
+        snippet = item.get("snippet", {})
+        video_title = snippet.get("title", "")
+        channel_title = snippet.get("channelTitle", "")
+        category_id = snippet.get("categoryId")
+        topics = [
+            t.split("/")[-1]
+            for t in item.get("topicDetails", {}).get("topicCategories", [])
+        ]
+        duration = parse_iso8601_duration(item.get("contentDetails", {}).get("duration"))
+
+        valid, reason = is_valid_ost_video(
+            title, video_title, channel_title, category_id, topics, duration,
+        )
+        if not valid:
+            print(f"  [{title}] SKIP（{reason}）")
+            invalid += 1
+            continue
+
+        text = f"{video_title}. {snippet.get('description') or ''}"
+        names = extract_tags(text, music_context=True)
+        if not names:
+            print(f"  [{title}] マッチなし")
+            no_match += 1
+            continue
+
+        rows = []
+        for name in names:
+            tid = tag_id_map.get(name)
+            if not tid:
+                continue
+            rows.append({
+                "game_id": game["id"],
+                "tag_id": tid,
+                "confidence": TAGS_CONFIDENCE,
+                "added_by": TAGS_SOURCE,
+            })
+        if not rows:
+            continue
+
+        db.table("game_tags").upsert(rows, on_conflict="game_id,tag_id").execute()
+        print(f"  [{title}] → タグ付与: {', '.join(names)}")
+        tagged += 1
+
+    print(
+        f"\n完了 — タグ付与 {tagged} 件 / 動画不正で除外 {invalid} 件 / マッチなし {no_match} 件"
+        f"（対象 {len(games)} 件）"
+    )
+
+
 def run(limit: int, mode: str) -> None:
     if mode == "tracks":
         run_tracks(limit)
+    elif mode == "tags":
+        run_tags(limit)
     else:
         run_games(limit)
 
@@ -252,7 +396,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--limit", type=int, default=100,
                         help="YouTube API 呼び出し上限 (デフォルト: 100 = 10,000 units)")
-    parser.add_argument("--mode", choices=["games", "tracks"], default="games",
-                        help="games: ゲーム OST 動画（デフォルト）/ tracks: トラック別動画")
+    parser.add_argument("--mode", choices=["games", "tracks", "tags"], default="games",
+                        help="games: ゲーム OST 動画（デフォルト）/ tracks: トラック別動画 / tags: 動画メタからムードタグ抽出")
     args = parser.parse_args()
     run(args.limit, args.mode)
