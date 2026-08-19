@@ -188,7 +188,7 @@ Tier 2 は「Tier 1 が取れなかったときの下地」。Tier 1 が後か�
 既存の `steam_ost_locked` / `youtube_locked` と同じ粒度に揃える。最小の変更:
 
 - `tags_locked` は **Last.fm 専用フラグ**として意味を確定（コメント修正のみ、データ移行不要）
-- 新スクリプトは `tags_locked` を参照せず、`game_tags.added_by` に自分のソース名の行があるかで処理済み判定する
+- 新スクリプトは `tags_locked` を参照せず、`game_tags.added_by` に自分のソース名の行があるかで処理済み判定する（→ **§12 で撤回**。タグが付かなかったゲームを判定できず日次バッチが空回りしたため、`game_tag_attempts` に置き換えた）
 - `games.steam_tags_scraped_at TIMESTAMPTZ` を追加（Steam タグの再取得管理用）
 
 ---
@@ -334,3 +334,105 @@ DELTARUNE   : "Crash! Bang! Boom! It's the music of DELTARUNE!"
 - うちタグ抽出成功: 36件（36%）
 
 214件全体に対する見込みは **約40件** のタグ新規付与（追加のカバレッジ改善は 6.2%→22.3% に対してさらに +数%程度）。小サンプル15件で実行し、DB書き込みを確認済み。
+
+---
+
+## 12. 処理済み判定を `game_tag_attempts` に置き換え（2026-08-19）
+
+### 経緯
+
+「日次バッチの説明文タグ付与が毎日同じ対象で走り続けている」との指摘を受けて調査した。
+
+### 判明したこと
+
+**(1) 本番（main）で旧ステップが動き続けていた。**
+スケジュール実行が参照するのは `main` の workflow。`main` には §10 で廃止したはずの
+`Step 1b — 説明文タグ付与（100件）` → `scripts/import_description_tags.py` が残っており、
+`develop` の刷新分が `main` に届いていなかった。Actions のログ 3 日分（16時間前 / 1日前 / 4日前）で
+処理対象 100 件が完全に一致し、いずれも「完了: 0 ゲームに計 0 タグ追加」。
+
+**(2) 後継スクリプトも同じ構造欠陥を持っていた。**
+§6-C で決めた「`game_tags.added_by` に自分のソース名の行があるか」で処理済みを判定する方式は、
+**タグが 1 件も付かなかったゲームを「未処理」と見なし続ける**。ソート順が `created_at` 昇順のため、
+そうしたゲームがキュー先頭を恒久的に占有し、日次バッチが毎日同じ説明文を取り直す。
+
+実測（2026-08-19 本番DB）:
+
+| ステップ | 候補 | 付与済 | 毎日再処理される滞留分 | 到達不能になるゲーム |
+|---|---|---|---|---|
+| Step 5b（`steam_ost_desc`） | 117 | 59 | 58 | `--limit 50` 超過分の 8 件 |
+| Step 3c（`youtube_desc`） | 310 | 4 | 306 | 候補取得が `limit*3=150` 件打ち切りのため 151 件目以降すべて |
+
+### 実装したもの
+
+- `supabase/schema.sql`: `game_tag_attempts (game_id, source, result, detail, attempted_at)` を追加。
+  `result` は `tagged` / `no_match` / `invalid` / `error`。前 3 つは恒久スキップ、`error`（通信・API 失敗）のみ
+  `RETRY_ERROR_AFTER_DAYS`（既定 7 日）後に再試行する。バッチ専用のため RLS は有効・公開ポリシーなし。
+- `scripts/tag_attempts.py`（新規）: `load_skip_ids()` / `record()` / `paged()`。
+  `load_skip_ids()` は移行用に「既存の `game_tags.added_by` 行があるゲーム」もスキップ扱いにするので、
+  過去に成功済みのゲームを叩き直すことはなく、データ移行は不要。
+- `import_steam_ost_data.py --phase tags`: 失敗理由を `_FetchFailure(result, detail)` で持ち上げ、
+  appdetails の `success=false` は `invalid`（再試行しても変わらない）、通信・HTTP・JSON 失敗は `error` に分類。
+- `import_youtube_video_ids.py --mode tags`: `_fetch_videos_meta()` が「リクエスト自体が失敗した videoId」を
+  別に返すようにし、**200 応答に含まれなかった動画（削除・非公開）＝ `invalid`** と
+  **`videos.list` の失敗＝`error`** を区別。候補取得の `limit*3` 打ち切りは全件取得に変更。
+- 併せて、処理済み集合の取得を `paged()` 経由にして PostgREST の 1 リクエスト上限（既定 1000 行）超えに対応。
+- `scripts/test_tag_attempts.py`（新規、標準ライブラリのみ）＋ CI の scripts ジョブに追加。
+
+### 日次ステップの全数監査
+
+「タグ2ステップを直して本当に空回りは無くなるのか」を確認するため、Actions ログ（16時間前 / 4日前）で
+全ステップの処理対象を突き合わせた。結果、**同じ構造欠陥がさらに2つ**見つかった。
+
+| ステップ | 判定 | 根拠 |
+|---|---|---|
+| Step 1b 説明文タグ | 解消 | main が PR #108 でリリース済み。ステップもスクリプトも削除された |
+| Step 2 説明文バックフィル | 正常 | 対象30件が毎日入れ替わる |
+| Step 3 YouTube 動画（ゲーム） | 正常 | 失敗時に `youtube_locked` を立てる |
+| **Step 3b トラック別 YouTube** | **空回り** | 10件中9件が4日前と同一 |
+| Step 3c / 5b タグ抽出 | 修正済 | 本節の対応 |
+| Step 4 / 4b 新規ゲーム追加 | 正常 | 毎日別のゲーム |
+| Step 5 OST discover | 正常 | 共通対象0件 |
+| Step 6 OST スクレイプ | 正常 | `steam_ost_scraped_at` で前進 |
+| **Step 8 Last.fm 類似度** | **空回り** | 出力が完全一致「0 件保存, 17 件スキップ」 |
+
+### Step 3b — トラック別 YouTube（1,000 units/日を空費）
+
+`tracks` には `games.youtube_locked` に相当する列が無く、`youtube_video_id IS NULL` だけで
+対象を選んでいた。検索が当たらなかったトラックは NULL のまま `created_at` 昇順の先頭に居座る。
+
+実測: tracks 3,983 件中 video_id ありは 151 件。検索対象 3,796 件に対し日次 10 件（1,000 units）で、
+成功実績は 1/10 件・0/10 件。事実上消化されない。
+
+対応: `tracks.youtube_locked BOOLEAN NOT NULL DEFAULT FALSE` を追加し、`games` モードと同じく
+見つからなかったトラックをロックする。
+
+### Step 8 — Last.fm 類似度（突合は機能していたが、キューが進んでいなかった）
+
+`composer_similarities` は 0 行、`--limit 30` の対象が毎日同一だった。原因は2つ。
+
+1. **記録が無い。** 保存できたときしか行が増えないので「Last.fm にデータが無い作曲家」は
+   永久に未処理のまま先頭に残る。実際その先頭30人がほぼ全員データなしだった。
+2. **応答の9割を捨てていた。** `composer_similarities` は両端とも自前 composers のペアしか
+   持てないため、突合できなかった類似アーティスト名はその場で破棄され、後から作曲家が
+   増えても Last.fm を叩き直さない限り拾えなかった。
+
+140人全員に問い合わせた実測では、96人に類似データがあり、延べ947件のうち **38人分が自前
+composers と突合可能**だった。つまり実装は動くのに、キューが先頭で詰まって到達していなかった。
+
+対応:
+
+- `composers.lastfm_similar_fetched_at TIMESTAMPTZ` を追加。結果の有無に関わらず記録し、
+  NULL の作曲家だけを対象にする。
+- `composer_similar_artists (composer_id, similar_name, score, fetched_at)` を追加し、
+  Last.fm の応答を名前のままキャッシュする。
+- 毎回キャッシュ全体を現在の composers と突合し直す（API リクエストは発生しない）ので、
+  新しい作曲家が追加されたときに過去の応答から自動的にペアが増える。
+- 突合ロジックは `scripts/composer_matching.py` に純粋関数として切り出し、CI でテストする。
+
+適用後の実測: 140人すべて取得済み、類似アーティスト 947 件をキャッシュ、
+`composer_similarities` に **52 ペア**（従来 0）。2回目以降の実行は Last.fm を一切叩かない。
+
+### 残作業
+
+`develop` → `main` のリリースまで、日次バッチの実際の挙動は変わらない。
