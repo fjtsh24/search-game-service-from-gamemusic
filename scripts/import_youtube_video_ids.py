@@ -11,6 +11,7 @@ YouTube Data API v3 でゲームサントラ / トラック別の VideoID を取
     「ゲーム名 トラック名」で YouTube 検索して UPDATE する。
     汎用的なトラック名（"Track 1" 等）はスキップ。
     両方のキーワードが動画タイトルに含まれるか厳格に検証する。
+    見つからなかったトラックは tracks.youtube_locked = TRUE にして以後スキップする。
 
   --mode tags
     games.youtube_video_id が設定済みのゲームを対象に、動画のタイトル・説明文から
@@ -157,11 +158,17 @@ def get_games_without_video(limit: int) -> list[dict]:
 
 
 def get_tracks_without_video(limit: int) -> list[dict]:
-    """tracks.youtube_video_id が未設定のトラックをゲームタイトル付きで取得する。"""
+    """tracks.youtube_video_id が未設定かつ youtube_locked でないトラックを取得する。
+
+    youtube_locked を見ないと、検索が当たらなかったトラックが created_at 昇順の
+    キュー先頭に恒久的に居座り、毎日同じ検索を繰り返すことになる
+    （1件 100 units なので日次 10 件で 1,000 units を空費していた）。
+    """
     rows = (
         db.table("tracks")
         .select("id, title, games(id, title)")
         .is_("youtube_video_id", "null")
+        .eq("youtube_locked", False)
         .order("created_at", desc=False)
         .limit(limit * 5)  # 汎用名フィルタ後に limit 件残るよう多めに取得
         .execute()
@@ -226,6 +233,7 @@ def run_tracks(limit: int) -> None:
 
     print(f"{len(tracks)} 件を処理します...\n")
     done = 0
+    locked = 0
 
     for track in tracks:
         game_title = track["games"]["title"]
@@ -255,12 +263,17 @@ def run_tracks(limit: int) -> None:
             print(f"  OK: [{game_title}] {track_title} → {video_id}")
             done += 1
         else:
-            print(f"  NG: [{game_title}] {track_title}")
+            # games モードと同じく、見つからなかったトラックはロックして以後スキップする
+            db.table("tracks").update({"youtube_locked": True}).eq("id", track["id"]).execute()
+            print(f"  NG (locked): [{game_title}] {track_title}")
+            locked += 1
 
         time.sleep(WAIT)
 
     print(f"\n完了 — {done}/{len(tracks)} 件に VideoID を設定")
     print(f"消費クォータ: 約 {len(tracks) * 100} units")
+    if locked:
+        print(f"locked 追加: {locked} 件（再試行するには tracks.youtube_locked = FALSE に更新）")
 
 
 YOUTUBE_VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"

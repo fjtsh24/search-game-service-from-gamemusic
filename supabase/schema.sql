@@ -42,14 +42,17 @@ COMMENT ON COLUMN games.youtube_flagged  IS 'TRUE: ユーザーから「動画�
 
 
 CREATE TABLE composers (
-  id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  name           TEXT        NOT NULL,
-  musicbrainz_id UUID        UNIQUE,
-  lastfm_name    TEXT,
-  bio            TEXT,
-  image_url      TEXT,
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id                         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  name                       TEXT        NOT NULL,
+  musicbrainz_id             UUID        UNIQUE,
+  lastfm_name                TEXT,
+  bio                        TEXT,
+  image_url                  TEXT,
+  lastfm_similar_fetched_at  TIMESTAMPTZ,
+  created_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+COMMENT ON COLUMN composers.lastfm_similar_fetched_at IS 'Last.fm artist.getSimilar を問い合わせた日時。結果の有無に関わらず記録し、日次バッチの処理済み判定に使う。NULL の作曲家だけが対象になるので、データが無い作曲家を毎日問い合わせ直すことはない。';
 
 
 CREATE TABLE tracks (
@@ -60,12 +63,14 @@ CREATE TABLE tracks (
   duration_seconds INTEGER,
   youtube_video_id TEXT,
   youtube_flagged  BOOLEAN     NOT NULL DEFAULT FALSE,
+  youtube_locked   BOOLEAN     NOT NULL DEFAULT FALSE,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT uq_tracks_game_track_number UNIQUE (game_id, track_number)
 );
 
 COMMENT ON COLUMN tracks.youtube_video_id IS '将来のトラック別動画対応用。OST 全体動画は games.youtube_video_id を使用。';
 COMMENT ON COLUMN tracks.youtube_flagged  IS 'TRUE: ユーザーから「動画が違う」報告あり。管理者確認待ち。VideoIDは即座には削除しない。';
+COMMENT ON COLUMN tracks.youtube_locked   IS 'TRUE: YouTube 検索で妥当な動画が見つからなかったトラック。日次バッチがスキップする。games.youtube_locked と同じ役割で、これが無いと検索失敗トラックがキュー先頭に残り毎日同じ検索を繰り返す。';
 
 
 CREATE TABLE track_composers (
@@ -103,6 +108,18 @@ CREATE TABLE composer_similarities (
   fetched_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (composer_id_a, composer_id_b)
 );
+
+
+CREATE TABLE composer_similar_artists (
+  composer_id  UUID        NOT NULL REFERENCES composers (id) ON DELETE CASCADE,
+  similar_name TEXT        NOT NULL,
+  score        FLOAT       NOT NULL CHECK (score BETWEEN 0 AND 1),
+  fetched_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (composer_id, similar_name)
+);
+
+COMMENT ON TABLE  composer_similar_artists              IS 'Last.fm artist.getSimilar の生の応答キャッシュ。自前の composers に居ないアーティストも名前のまま保持する。composer_similarities は両端が自前 composers のペアしか持てないため、そのままでは応答の大半（実測 947 件中 9 割）を捨てることになり、後から作曲家が増えても Last.fm を叩き直さないと突合できなかった。';
+COMMENT ON COLUMN composer_similar_artists.similar_name IS 'Last.fm が返したアーティスト名（原文のまま）。突合は小文字化して composers.lastfm_name / name と比較する。';
 
 
 CREATE TABLE users (
@@ -172,6 +189,7 @@ CREATE INDEX idx_game_tag_attempts_source ON game_tag_attempts (source, result, 
 CREATE INDEX idx_game_tag_flags_game_id   ON game_tag_flags (game_id);
 CREATE INDEX idx_game_tag_flags_tag_id    ON game_tag_flags (tag_id);
 CREATE INDEX idx_composer_sim_a_score     ON composer_similarities (composer_id_a, score DESC);
+CREATE INDEX idx_composer_similar_name    ON composer_similar_artists (lower(similar_name));
 CREATE INDEX idx_user_games_user_id       ON user_games (user_id);
 CREATE INDEX idx_user_games_user_rating   ON user_games (user_id, rating DESC NULLS LAST);
 
@@ -244,6 +262,8 @@ ALTER TABLE track_composers     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE mood_tags           ENABLE ROW LEVEL SECURITY;
 ALTER TABLE game_tags           ENABLE ROW LEVEL SECURITY;
 ALTER TABLE composer_similarities ENABLE ROW LEVEL SECURITY;
+-- composer_similar_artists はバッチ内部のキャッシュ（service role のみ）。公開ポリシーを作らない。
+ALTER TABLE composer_similar_artists ENABLE ROW LEVEL SECURITY;
 ALTER TABLE users               ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_games          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE system_settings     ENABLE ROW LEVEL SECURITY;

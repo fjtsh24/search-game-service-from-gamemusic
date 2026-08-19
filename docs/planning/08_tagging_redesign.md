@@ -379,6 +379,60 @@ DELTARUNE   : "Crash! Bang! Boom! It's the music of DELTARUNE!"
 - 併せて、処理済み集合の取得を `paged()` 経由にして PostgREST の 1 リクエスト上限（既定 1000 行）超えに対応。
 - `scripts/test_tag_attempts.py`（新規、標準ライブラリのみ）＋ CI の scripts ジョブに追加。
 
+### 日次ステップの全数監査
+
+「タグ2ステップを直して本当に空回りは無くなるのか」を確認するため、Actions ログ（16時間前 / 4日前）で
+全ステップの処理対象を突き合わせた。結果、**同じ構造欠陥がさらに2つ**見つかった。
+
+| ステップ | 判定 | 根拠 |
+|---|---|---|
+| Step 1b 説明文タグ | 解消 | main が PR #108 でリリース済み。ステップもスクリプトも削除された |
+| Step 2 説明文バックフィル | 正常 | 対象30件が毎日入れ替わる |
+| Step 3 YouTube 動画（ゲーム） | 正常 | 失敗時に `youtube_locked` を立てる |
+| **Step 3b トラック別 YouTube** | **空回り** | 10件中9件が4日前と同一 |
+| Step 3c / 5b タグ抽出 | 修正済 | 本節の対応 |
+| Step 4 / 4b 新規ゲーム追加 | 正常 | 毎日別のゲーム |
+| Step 5 OST discover | 正常 | 共通対象0件 |
+| Step 6 OST スクレイプ | 正常 | `steam_ost_scraped_at` で前進 |
+| **Step 8 Last.fm 類似度** | **空回り** | 出力が完全一致「0 件保存, 17 件スキップ」 |
+
+### Step 3b — トラック別 YouTube（1,000 units/日を空費）
+
+`tracks` には `games.youtube_locked` に相当する列が無く、`youtube_video_id IS NULL` だけで
+対象を選んでいた。検索が当たらなかったトラックは NULL のまま `created_at` 昇順の先頭に居座る。
+
+実測: tracks 3,983 件中 video_id ありは 151 件。検索対象 3,796 件に対し日次 10 件（1,000 units）で、
+成功実績は 1/10 件・0/10 件。事実上消化されない。
+
+対応: `tracks.youtube_locked BOOLEAN NOT NULL DEFAULT FALSE` を追加し、`games` モードと同じく
+見つからなかったトラックをロックする。
+
+### Step 8 — Last.fm 類似度（突合は機能していたが、キューが進んでいなかった）
+
+`composer_similarities` は 0 行、`--limit 30` の対象が毎日同一だった。原因は2つ。
+
+1. **記録が無い。** 保存できたときしか行が増えないので「Last.fm にデータが無い作曲家」は
+   永久に未処理のまま先頭に残る。実際その先頭30人がほぼ全員データなしだった。
+2. **応答の9割を捨てていた。** `composer_similarities` は両端とも自前 composers のペアしか
+   持てないため、突合できなかった類似アーティスト名はその場で破棄され、後から作曲家が
+   増えても Last.fm を叩き直さない限り拾えなかった。
+
+140人全員に問い合わせた実測では、96人に類似データがあり、延べ947件のうち **38人分が自前
+composers と突合可能**だった。つまり実装は動くのに、キューが先頭で詰まって到達していなかった。
+
+対応:
+
+- `composers.lastfm_similar_fetched_at TIMESTAMPTZ` を追加。結果の有無に関わらず記録し、
+  NULL の作曲家だけを対象にする。
+- `composer_similar_artists (composer_id, similar_name, score, fetched_at)` を追加し、
+  Last.fm の応答を名前のままキャッシュする。
+- 毎回キャッシュ全体を現在の composers と突合し直す（API リクエストは発生しない）ので、
+  新しい作曲家が追加されたときに過去の応答から自動的にペアが増える。
+- 突合ロジックは `scripts/composer_matching.py` に純粋関数として切り出し、CI でテストする。
+
+適用後の実測: 140人すべて取得済み、類似アーティスト 947 件をキャッシュ、
+`composer_similarities` に **52 ペア**（従来 0）。2回目以降の実行は Last.fm を一切叩かない。
+
 ### 残作業
 
-`main` はまだ旧 Step 1b を含むため、`develop` → `main` のリリースまで空回りは止まらない。
+`develop` → `main` のリリースまで、日次バッチの実際の挙動は変わらない。
