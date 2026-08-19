@@ -40,6 +40,22 @@ def _as_weights(tags) -> dict:
     return {t: 1.0 for t in tags}
 
 
+def _normalize_confidence(raw) -> float:
+    """DB から読んだ confidence 値を float に丸め、[0.0, 1.0] にクランプする。
+
+    game_tags.confidence は NOT NULL DEFAULT 1.0 のスキーマ制約があるため
+    通常 NULL は入らないが、PostgREST 経由の値が None / 文字列など
+    想定外の型で来た場合にも Jaccard 計算が壊れないよう防御的に変換する。
+    """
+    if raw is None:
+        return 1.0
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 1.0
+    return max(0.0, min(1.0, value))
+
+
 def compute_similarity_score(
     target_tags,
     candidate_tags,
@@ -107,7 +123,7 @@ async def similar_games_for(game_id: str, limit: int = 8) -> list[dict]:
         .execute()
     )
     target_tags = {
-        row["tag_id"]: row.get("confidence", 1.0) or 1.0
+        row["tag_id"]: _normalize_confidence(row.get("confidence"))
         for row in (tag_result.data or [])
     }
 
@@ -170,7 +186,7 @@ async def similar_games_for(game_id: str, limit: int = 8) -> list[dict]:
     )
     game_all_tags: dict[str, dict] = defaultdict(dict)
     for row in (all_tags_result.data or []):
-        game_all_tags[row["game_id"]][row["tag_id"]] = row.get("confidence", 1.0) or 1.0
+        game_all_tags[row["game_id"]][row["tag_id"]] = _normalize_confidence(row.get("confidence"))
 
     scores: list[tuple[float, str]] = []
     for gid in game_shared:

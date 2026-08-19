@@ -36,7 +36,6 @@ import argparse
 import os
 import re
 import time
-from html import unescape
 from datetime import datetime, timezone
 
 import requests
@@ -396,39 +395,79 @@ def run_scrape(limit: int) -> None:
 
 # ── Phase tags ────────────────────────────────────────────────────────────────
 
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
-
-
 def _plain_text(html_text: str) -> str:
-    """Steam の説明文 HTML からプレーンテキストを取り出す。"""
+    """Steam の説明文 HTML からプレーンテキストを取り出す。
+
+    正規表現によるタグ除去は <script>/<style> の中身やコメントを
+    誤ってテキストとして拾ってしまうため、BeautifulSoup でパースする
+    （_scrape_ost_page と同じ手法）。
+    """
     if not html_text:
         return ""
-    return " ".join(unescape(_HTML_TAG_RE.sub(" ", html_text)).split())
+    soup = BeautifulSoup(html_text, "html.parser")
+    for tag in soup(["script", "style"]):
+        tag.decompose()
+    return " ".join(soup.get_text(" ").split())
+
+
+_TAGS_RETRY_ATTEMPTS = 3
+_TAGS_RETRY_BASE_WAIT = 5  # 429/5xx 時の初回待機秒数（以後 backoff で倍増）
 
 
 def _fetch_ost_description(ost_appid: int) -> str:
     """appdetails API から OST の説明文（detailed + short）を取得する。
 
     ストアページの HTML スクレイピングではなく appdetails API を使う。
+    filters=basic で説明文以外の不要なフィールド（価格・要件等）を除外し、
+    429/5xx はリトライ（exponential backoff）、それ以外の失敗は空文字を返して
+    次回バッチでの再試行に委ねる。
     """
-    time.sleep(TAGS_WAIT)
-    try:
-        resp = http.get(STEAM_APPDETAILS_URL, params={
-            "appids": ost_appid,
-            "l": "english",
-        }, timeout=15)
-        resp.raise_for_status()
-    except Exception as e:
-        print(f"  appdetails エラー (appid={ost_appid}): {e}")
-        return ""
+    for attempt in range(_TAGS_RETRY_ATTEMPTS):
+        time.sleep(TAGS_WAIT)
+        try:
+            resp = http.get(STEAM_APPDETAILS_URL, params={
+                "appids": ost_appid,
+                "l": "english",
+                "filters": "basic",
+            }, timeout=15)
+        except requests.RequestException as e:
+            print(f"  appdetails 通信エラー (appid={ost_appid}): {e}")
+            return ""
 
-    entry = resp.json().get(str(ost_appid)) or {}
-    if not entry.get("success"):
-        return ""
-    data = entry["data"]
-    return _plain_text(
-        f"{data.get('detailed_description') or ''} {data.get('short_description') or ''}"
-    )
+        if resp.status_code == 429 or resp.status_code >= 500:
+            wait = _TAGS_RETRY_BASE_WAIT * (2 ** attempt)
+            print(f"  appdetails {resp.status_code}（attempt {attempt + 1}/{_TAGS_RETRY_ATTEMPTS}）— {wait}秒待機")
+            time.sleep(wait)
+            continue
+
+        if not resp.ok:
+            print(f"  appdetails エラー (appid={ost_appid}): HTTP {resp.status_code}")
+            return ""
+
+        try:
+            payload = resp.json()
+        except ValueError as e:
+            print(f"  appdetails JSON デコード失敗 (appid={ost_appid}): {e}")
+            return ""
+
+        if not isinstance(payload, dict):
+            print(f"  appdetails 予期しないレスポンス形状 (appid={ost_appid}): {type(payload).__name__}")
+            return ""
+
+        entry = payload.get(str(ost_appid))
+        if not isinstance(entry, dict) or not entry.get("success"):
+            return ""
+
+        data = entry.get("data")
+        if not isinstance(data, dict):
+            return ""
+
+        return _plain_text(
+            f"{data.get('detailed_description') or ''} {data.get('short_description') or ''}"
+        )
+
+    print(f"  appdetails リトライ上限到達 (appid={ost_appid}) — スキップ")
+    return ""
 
 
 def _clear_tag_cache(game_ids: list[str], tag_ids: list[str]) -> None:

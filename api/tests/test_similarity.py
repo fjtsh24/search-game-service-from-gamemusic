@@ -6,7 +6,7 @@ compute_similarity_score は純粋関数なので DB モック不要。
 
 import pytest
 
-from app.services.similarity import compute_similarity_score
+from app.services.similarity import _normalize_confidence, compute_similarity_score
 
 
 class TestComputeSimilarityScore:
@@ -106,6 +106,32 @@ class TestWeightedJaccard:
     def test_composer_bonus_still_applies_with_weights(self):
         score = compute_similarity_score({"a": 0.4}, {"b": 0.4}, {"c1"}, {"c1"})
         assert score == pytest.approx(0.2)
+
+
+class TestNormalizeConfidence:
+    """DB から読んだ confidence 値の正規化（PRレビュー指摘: 型不整合・範囲外への防御）。"""
+
+    def test_none_defaults_to_one(self):
+        assert _normalize_confidence(None) == pytest.approx(1.0)
+
+    def test_valid_float_passes_through(self):
+        assert _normalize_confidence(0.4) == pytest.approx(0.4)
+
+    def test_string_number_is_converted(self):
+        # PostgREST/ドライバの都合で数値が文字列で来るケースへの防御
+        assert _normalize_confidence("0.7") == pytest.approx(0.7)
+
+    def test_non_numeric_string_defaults_to_one(self):
+        assert _normalize_confidence("not-a-number") == pytest.approx(1.0)
+
+    def test_out_of_range_high_is_clamped(self):
+        assert _normalize_confidence(1.5) == pytest.approx(1.0)
+
+    def test_out_of_range_negative_is_clamped(self):
+        assert _normalize_confidence(-0.3) == pytest.approx(0.0)
+
+    def test_int_is_accepted(self):
+        assert _normalize_confidence(1) == pytest.approx(1.0)
 
 
 class TestSimilarGamesFor:
