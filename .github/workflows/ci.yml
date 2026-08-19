@@ -71,6 +71,12 @@ jobs:
       - name: Test youtube_video_validation.py（標準ライブラリのみ・追加依存なし）
         run: python3 test_youtube_video_validation.py -v
 
+      - name: Test tag_attempts.py（標準ライブラリのみ・追加依存なし）
+        run: python3 test_tag_attempts.py -v
+
+      - name: Test composer_matching.py（標準ライブラリのみ・追加依存なし）
+        run: python3 test_composer_matching.py -v
+
   # ── Next.js Web: Lint + Type check + Build ────────────────────────────────
   web:
     name: Web — Lint & Build

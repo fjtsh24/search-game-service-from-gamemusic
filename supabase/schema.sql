@@ -34,7 +34,7 @@ CREATE TABLE games (
 );
 
 COMMENT ON COLUMN games.steam_app_id     IS 'Steam ゲーム本体のappid（サントラDLC/Soundtrackのappidではない）。GetOwnedGames API と突合して user_games にマッチさせるために使用。';
-COMMENT ON COLUMN games.tags_locked      IS 'TRUE: Last.fm でタグが取得できないゲーム。import_game_tags.py（Last.fm）専用のスキップフラグであり、「タグ付与不能」を意味しない。他ソース（steam_ost_desc 等）はこのフラグを参照せず、game_tags.added_by で処理済みを判定する。';
+COMMENT ON COLUMN games.tags_locked      IS 'TRUE: Last.fm でタグが取得できないゲーム。import_game_tags.py（Last.fm）専用のスキップフラグであり、「タグ付与不能」を意味しない。他ソース（steam_ost_desc 等）はこのフラグを参照せず、game_tag_attempts で処理済みを判定する。';
 COMMENT ON COLUMN games.youtube_locked   IS 'TRUE: YouTube で動画が見つからないゲーム。日次バッチがスキップする。';
 COMMENT ON COLUMN games.steam_ost_locked IS 'TRUE: Steam に Music アプリ（OST）が存在しないゲーム。discover フェーズがスキップする。';
 COMMENT ON COLUMN games.youtube_video_id IS 'OST 全体の YouTube 動画 ID。トラック単位の動画は tracks.youtube_video_id を参照。';
@@ -42,14 +42,17 @@ COMMENT ON COLUMN games.youtube_flagged  IS 'TRUE: ユーザーから「動画�
 
 
 CREATE TABLE composers (
-  id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  name           TEXT        NOT NULL,
-  musicbrainz_id UUID        UNIQUE,
-  lastfm_name    TEXT,
-  bio            TEXT,
-  image_url      TEXT,
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id                         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  name                       TEXT        NOT NULL,
+  musicbrainz_id             UUID        UNIQUE,
+  lastfm_name                TEXT,
+  bio                        TEXT,
+  image_url                  TEXT,
+  lastfm_similar_fetched_at  TIMESTAMPTZ,
+  created_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+COMMENT ON COLUMN composers.lastfm_similar_fetched_at IS 'Last.fm artist.getSimilar を問い合わせた日時。結果の有無に関わらず記録し、日次バッチの処理済み判定に使う。NULL の作曲家だけが対象になるので、データが無い作曲家を毎日問い合わせ直すことはない。';
 
 
 CREATE TABLE tracks (
@@ -60,12 +63,14 @@ CREATE TABLE tracks (
   duration_seconds INTEGER,
   youtube_video_id TEXT,
   youtube_flagged  BOOLEAN     NOT NULL DEFAULT FALSE,
+  youtube_locked   BOOLEAN     NOT NULL DEFAULT FALSE,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT uq_tracks_game_track_number UNIQUE (game_id, track_number)
 );
 
 COMMENT ON COLUMN tracks.youtube_video_id IS '将来のトラック別動画対応用。OST 全体動画は games.youtube_video_id を使用。';
 COMMENT ON COLUMN tracks.youtube_flagged  IS 'TRUE: ユーザーから「動画が違う」報告あり。管理者確認待ち。VideoIDは即座には削除しない。';
+COMMENT ON COLUMN tracks.youtube_locked   IS 'TRUE: YouTube 検索で妥当な動画が見つからなかったトラック。日次バッチがスキップする。games.youtube_locked と同じ役割で、これが無いと検索失敗トラックがキュー先頭に残り毎日同じ検索を繰り返す。';
 
 
 CREATE TABLE track_composers (
@@ -103,6 +108,18 @@ CREATE TABLE composer_similarities (
   fetched_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (composer_id_a, composer_id_b)
 );
+
+
+CREATE TABLE composer_similar_artists (
+  composer_id  UUID        NOT NULL REFERENCES composers (id) ON DELETE CASCADE,
+  similar_name TEXT        NOT NULL,
+  score        FLOAT       NOT NULL CHECK (score BETWEEN 0 AND 1),
+  fetched_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (composer_id, similar_name)
+);
+
+COMMENT ON TABLE  composer_similar_artists              IS 'Last.fm artist.getSimilar の生の応答キャッシュ。自前の composers に居ないアーティストも名前のまま保持する。composer_similarities は両端が自前 composers のペアしか持てないため、そのままでは応答の大半（実測 947 件中 9 割）を捨てることになり、後から作曲家が増えても Last.fm を叩き直さないと突合できなかった。';
+COMMENT ON COLUMN composer_similar_artists.similar_name IS 'Last.fm が返したアーティスト名（原文のまま）。突合は小文字化して composers.lastfm_name / name と比較する。';
 
 
 CREATE TABLE users (
@@ -146,6 +163,20 @@ CREATE TABLE game_tag_flags (
 COMMENT ON TABLE game_tag_flags IS 'ユーザーが「このタグは間違い」と報告した記録。即時削除せず管理者確認待ち。';
 
 
+CREATE TABLE game_tag_attempts (
+  game_id      UUID        NOT NULL REFERENCES games (id) ON DELETE CASCADE,
+  source       TEXT        NOT NULL,
+  result       TEXT        NOT NULL CHECK (result IN ('tagged', 'no_match', 'invalid', 'error')),
+  detail       TEXT,
+  attempted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (game_id, source)
+);
+
+COMMENT ON TABLE  game_tag_attempts        IS 'タグ抽出バッチの「このゲームをこのソースで試した」記録。game_tags に行が増えたかどうかとは独立に残すため、タグが1件も付かなかったゲームを日次バッチが毎日再取得し続けるのを防ぐ。';
+COMMENT ON COLUMN game_tag_attempts.source IS 'タグ抽出元。game_tags.added_by と同じ値を使う（steam_ost_desc / youtube_desc）。';
+COMMENT ON COLUMN game_tag_attempts.result IS 'tagged=タグ付与成功 / no_match=説明文は取れたがムード語なし / invalid=入力が対象外（動画の検証NG等） / error=通信・API失敗。tagged・no_match・invalid は恒久スキップ、error のみ一定期間後に再試行する。';
+COMMENT ON COLUMN game_tag_attempts.detail IS '再試行判断とログ調査のための補足（invalid の理由、error のステータス等）。';
+
 -- ── インデックス ───────────────────────────────────────────────────────────────
 
 CREATE INDEX idx_games_steam_app_id       ON games (steam_app_id);
@@ -154,9 +185,11 @@ CREATE INDEX idx_composers_name           ON composers USING gin (to_tsvector('s
 CREATE INDEX idx_tracks_game_id           ON tracks (game_id);
 CREATE INDEX idx_track_composers_composer_id ON track_composers (composer_id);
 CREATE INDEX idx_game_tags_tag_id         ON game_tags (tag_id);
+CREATE INDEX idx_game_tag_attempts_source ON game_tag_attempts (source, result, attempted_at);
 CREATE INDEX idx_game_tag_flags_game_id   ON game_tag_flags (game_id);
 CREATE INDEX idx_game_tag_flags_tag_id    ON game_tag_flags (tag_id);
 CREATE INDEX idx_composer_sim_a_score     ON composer_similarities (composer_id_a, score DESC);
+CREATE INDEX idx_composer_similar_name    ON composer_similar_artists (lower(similar_name));
 CREATE INDEX idx_user_games_user_id       ON user_games (user_id);
 CREATE INDEX idx_user_games_user_rating   ON user_games (user_id, rating DESC NULLS LAST);
 
@@ -229,10 +262,14 @@ ALTER TABLE track_composers     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE mood_tags           ENABLE ROW LEVEL SECURITY;
 ALTER TABLE game_tags           ENABLE ROW LEVEL SECURITY;
 ALTER TABLE composer_similarities ENABLE ROW LEVEL SECURITY;
+-- composer_similar_artists はバッチ内部のキャッシュ（service role のみ）。公開ポリシーを作らない。
+ALTER TABLE composer_similar_artists ENABLE ROW LEVEL SECURITY;
 ALTER TABLE users               ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_games          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE system_settings     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE game_tag_flags      ENABLE ROW LEVEL SECURITY;
+-- game_tag_attempts はバッチ専用（service role のみ）。公開ポリシーを作らず全拒否のままにする。
+ALTER TABLE game_tag_attempts   ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "public_read" ON games               FOR SELECT USING (true);
 CREATE POLICY "public_read" ON composers           FOR SELECT USING (true);

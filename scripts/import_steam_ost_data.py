@@ -12,6 +12,8 @@ Steam Music アプリ（type=music）からトラックリストと作曲家ク�
     steam_ost_appid があるゲームの OST 説明文を appdetails API から取得し、
     ムードタグを抽出して game_tags に保存する（added_by='steam_ost_desc'）。
     games.description と違い OST 説明文は音楽そのものの記述なのでタグ抽出に有効。
+    処理済み判定は game_tag_attempts で行い、タグが付かなかったゲームにも試行記録を
+    残す（タグの有無で判定すると同じゲームを毎日取り直すことになるため）。
 
   Phase scrape（HTMLスクレイピング）:
     steam_ost_appid があって steam_ost_scraped_at が未設定のゲームを対象に、
@@ -43,6 +45,15 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
 from music_text_tags import extract_tags
+from tag_attempts import (
+    RESULT_ERROR,
+    RESULT_INVALID,
+    RESULT_NO_MATCH,
+    RESULT_TAGGED,
+    load_skip_ids,
+    paged,
+    record,
+)
 
 load_dotenv(dotenv_path=".env")
 
@@ -414,13 +425,24 @@ _TAGS_RETRY_ATTEMPTS = 3
 _TAGS_RETRY_BASE_WAIT = 5  # 429/5xx 時の初回待機秒数（以後 backoff で倍増）
 
 
+class _FetchFailure(Exception):
+    """説明文を取得できなかった理由を game_tag_attempts の result/detail として運ぶ。"""
+
+    def __init__(self, result: str, detail: str):
+        super().__init__(f"{result}: {detail}")
+        self.result = result
+        self.detail = detail
+
+
 def _fetch_ost_description(ost_appid: int) -> str:
     """appdetails API から OST の説明文（detailed + short）を取得する。
 
     ストアページの HTML スクレイピングではなく appdetails API を使う。
     filters=basic で説明文以外の不要なフィールド（価格・要件等）を除外し、
-    429/5xx はリトライ（exponential backoff）、それ以外の失敗は空文字を返して
-    次回バッチでの再試行に委ねる。
+    429/5xx はリトライ（exponential backoff）する。
+
+    取得できなかった場合は _FetchFailure を送出する。呼び出し側はこれを
+    game_tag_attempts に記録し、error は後日再試行・invalid は恒久スキップに振り分ける。
     """
     for attempt in range(_TAGS_RETRY_ATTEMPTS):
         time.sleep(TAGS_WAIT)
@@ -431,8 +453,7 @@ def _fetch_ost_description(ost_appid: int) -> str:
                 "filters": "basic",
             }, timeout=15)
         except requests.RequestException as e:
-            print(f"  appdetails 通信エラー (appid={ost_appid}): {e}")
-            return ""
+            raise _FetchFailure(RESULT_ERROR, f"request_exception: {e}") from e
 
         if resp.status_code == 429 or resp.status_code >= 500:
             wait = _TAGS_RETRY_BASE_WAIT * (2 ** attempt)
@@ -441,33 +462,34 @@ def _fetch_ost_description(ost_appid: int) -> str:
             continue
 
         if not resp.ok:
-            print(f"  appdetails エラー (appid={ost_appid}): HTTP {resp.status_code}")
-            return ""
+            raise _FetchFailure(RESULT_ERROR, f"http_{resp.status_code}")
 
         try:
             payload = resp.json()
         except ValueError as e:
-            print(f"  appdetails JSON デコード失敗 (appid={ost_appid}): {e}")
-            return ""
+            raise _FetchFailure(RESULT_ERROR, f"json_decode: {e}") from e
 
         if not isinstance(payload, dict):
-            print(f"  appdetails 予期しないレスポンス形状 (appid={ost_appid}): {type(payload).__name__}")
-            return ""
+            raise _FetchFailure(RESULT_ERROR, f"unexpected_payload: {type(payload).__name__}")
 
+        # success=false / data 不正は「この appid には説明文が存在しない」を意味するので
+        # 通信エラーと違い再試行しても結果は変わらない → invalid（恒久スキップ）。
         entry = payload.get(str(ost_appid))
         if not isinstance(entry, dict) or not entry.get("success"):
-            return ""
+            raise _FetchFailure(RESULT_INVALID, "appdetails_success_false")
 
         data = entry.get("data")
         if not isinstance(data, dict):
-            return ""
+            raise _FetchFailure(RESULT_INVALID, "appdetails_no_data")
 
-        return _plain_text(
+        text = _plain_text(
             f"{data.get('detailed_description') or ''} {data.get('short_description') or ''}"
         )
+        if not text:
+            raise _FetchFailure(RESULT_NO_MATCH, "empty_description")
+        return text
 
-    print(f"  appdetails リトライ上限到達 (appid={ost_appid}) — スキップ")
-    return ""
+    raise _FetchFailure(RESULT_ERROR, f"retry_exhausted_{_TAGS_RETRY_ATTEMPTS}")
 
 
 def _clear_tag_cache(game_ids: list[str], tag_ids: list[str]) -> None:
@@ -504,55 +526,48 @@ def run_tags(limit: int, dry_run: bool = False) -> None:
     音楽への言及をほとんど含まないが、OST（type=music）の説明文は音楽そのものの
     記述であるため、mood タグの抽出元として有効。
     詳細: docs/planning/08_tagging_redesign.md §4-A
+
+    処理済み判定は game_tag_attempts で行う。タグが 1 件も付かなかったゲームも
+    「試した」記録を残すため、同じゲームの説明文を毎日取り直すことはない。
     """
     tag_rows = db.table("mood_tags").select("id, name").execute().data or []
     tag_id_map: dict[str, str] = {r["name"]: r["id"] for r in tag_rows}
 
-    # すでにこのソースでタグ付け済みのゲームは対象外
-    done_rows = (
-        db.table("game_tags")
-        .select("game_id")
-        .eq("added_by", OST_TAG_SOURCE)
-        .execute()
-        .data or []
-    )
-    already_done = {r["game_id"] for r in done_rows}
-
-    candidates = (
-        db.table("games")
+    skip_ids = load_skip_ids(db, OST_TAG_SOURCE)
+    candidates = paged(
+        lambda: db.table("games")
         .select("id, title, steam_ost_appid")
         .not_.is_("steam_ost_appid", "null")
         .order("created_at", desc=False)
-        .execute()
-        .data or []
     )
-    games = [g for g in candidates if g["id"] not in already_done][:limit]
+    games = [g for g in candidates if g["id"] not in skip_ids][:limit]
 
     if not games:
-        print("[tags] 対象ゲームなし。")
+        print(f"[tags] 対象ゲームなし（候補 {len(candidates)} 件はすべて試行済み）。")
         return
 
-    print(f"[tags] {len(games)} 件を処理します...")
+    print(f"[tags] {len(games)} 件を処理します（候補 {len(candidates)} 件 / 試行済み {len(skip_ids)} 件）...")
     tagged_game_ids: list[str] = []
     tagged_tag_ids: set[str] = set()
     total_tags = 0
     no_match = 0
+    failed = 0
 
     for i, game in enumerate(games, 1):
         title = game["title"]
         print(f"[{i}/{len(games)}] {title}")
 
-        text = _fetch_ost_description(game["steam_ost_appid"])
-        if not text:
-            print("  → 説明文を取得できず（次回再試行）")
+        try:
+            text = _fetch_ost_description(game["steam_ost_appid"])
+        except _FetchFailure as e:
+            retry_note = "次回再試行" if e.result == RESULT_ERROR else "以後スキップ"
+            print(f"  → 説明文を取得できず（{e.detail} / {retry_note}）")
+            failed += 1
+            if not dry_run:
+                record(db, game["id"], OST_TAG_SOURCE, e.result, e.detail)
             continue
 
         names = extract_tags(text, music_context=True)
-        if not names:
-            print(f"  → ムードタグにマッチせず（{len(text)} 字）")
-            no_match += 1
-            continue
-
         rows = []
         for name in names:
             tid = tag_id_map.get(name)
@@ -565,20 +580,25 @@ def run_tags(limit: int, dry_run: bool = False) -> None:
                 "confidence": OST_TAG_CONFIDENCE,
                 "added_by": OST_TAG_SOURCE,
             })
-            tagged_tag_ids.add(tid)
 
         if not rows:
+            print(f"  → ムードタグにマッチせず（{len(text)} 字）")
+            no_match += 1
+            if not dry_run:
+                record(db, game["id"], OST_TAG_SOURCE, RESULT_NO_MATCH, f"chars={len(text)}")
             continue
 
         print(f"  → タグ付与: {', '.join(names)}")
         if not dry_run:
             db.table("game_tags").upsert(rows, on_conflict="game_id,tag_id").execute()
+            record(db, game["id"], OST_TAG_SOURCE, RESULT_TAGGED, f"tags={len(rows)}")
         tagged_game_ids.append(game["id"])
+        tagged_tag_ids.update(r["tag_id"] for r in rows)
         total_tags += len(rows)
 
     print(
         f"[tags] 完了 — {len(tagged_game_ids)} ゲームに計 {total_tags} タグ付与"
-        f"（マッチなし {no_match} 件）"
+        f"（マッチなし {no_match} 件 / 取得失敗 {failed} 件）"
     )
     if dry_run:
         print("[tags] dry-run のため DB 書き込みはスキップしました")

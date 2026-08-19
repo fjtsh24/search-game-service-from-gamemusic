@@ -11,6 +11,7 @@ YouTube Data API v3 でゲームサントラ / トラック別の VideoID を取
     「ゲーム名 トラック名」で YouTube 検索して UPDATE する。
     汎用的なトラック名（"Track 1" 等）はスキップ。
     両方のキーワードが動画タイトルに含まれるか厳格に検証する。
+    見つからなかったトラックは tracks.youtube_locked = TRUE にして以後スキップする。
 
   --mode tags
     games.youtube_video_id が設定済みのゲームを対象に、動画のタイトル・説明文から
@@ -18,6 +19,8 @@ YouTube Data API v3 でゲームサントラ / トラック別の VideoID を取
     videos.list（50件/リクエスト=1 unit）でメタ取得し、youtube_video_validation.py の
     判定（ゲーム名一致・尺90秒〜3時間・実況/トレーラー除外）を通った動画のみを対象にする。
     tags_locked / steam_ost_appid の有無は問わない（このモードは動画メタデータのみ参照）。
+    処理済み判定は game_tag_attempts で行い、検証NG・マッチなしのゲームも記録する
+    （タグの有無で判定すると同じゲームを毎日取り直すことになるため）。
     詳細: docs/planning/08_tagging_redesign.md §11
 
 YouTube Data API は 1 クエリ = 100 units / 1 日の無料枠 = 10,000 units。
@@ -42,6 +45,15 @@ import requests
 from dotenv import load_dotenv
 
 from music_text_tags import extract_tags
+from tag_attempts import (
+    RESULT_ERROR,
+    RESULT_INVALID,
+    RESULT_NO_MATCH,
+    RESULT_TAGGED,
+    load_skip_ids,
+    paged,
+    record,
+)
 from youtube_video_validation import is_valid_ost_video, parse_iso8601_duration
 
 load_dotenv()
@@ -146,11 +158,17 @@ def get_games_without_video(limit: int) -> list[dict]:
 
 
 def get_tracks_without_video(limit: int) -> list[dict]:
-    """tracks.youtube_video_id が未設定のトラックをゲームタイトル付きで取得する。"""
+    """tracks.youtube_video_id が未設定かつ youtube_locked でないトラックを取得する。
+
+    youtube_locked を見ないと、検索が当たらなかったトラックが created_at 昇順の
+    キュー先頭に恒久的に居座り、毎日同じ検索を繰り返すことになる
+    （1件 100 units なので日次 10 件で 1,000 units を空費していた）。
+    """
     rows = (
         db.table("tracks")
         .select("id, title, games(id, title)")
         .is_("youtube_video_id", "null")
+        .eq("youtube_locked", False)
         .order("created_at", desc=False)
         .limit(limit * 5)  # 汎用名フィルタ後に limit 件残るよう多めに取得
         .execute()
@@ -215,6 +233,7 @@ def run_tracks(limit: int) -> None:
 
     print(f"{len(tracks)} 件を処理します...\n")
     done = 0
+    locked = 0
 
     for track in tracks:
         game_title = track["games"]["title"]
@@ -244,12 +263,17 @@ def run_tracks(limit: int) -> None:
             print(f"  OK: [{game_title}] {track_title} → {video_id}")
             done += 1
         else:
-            print(f"  NG: [{game_title}] {track_title}")
+            # games モードと同じく、見つからなかったトラックはロックして以後スキップする
+            db.table("tracks").update({"youtube_locked": True}).eq("id", track["id"]).execute()
+            print(f"  NG (locked): [{game_title}] {track_title}")
+            locked += 1
 
         time.sleep(WAIT)
 
     print(f"\n完了 — {done}/{len(tracks)} 件に VideoID を設定")
     print(f"消費クォータ: 約 {len(tracks) * 100} units")
+    if locked:
+        print(f"locked 追加: {locked} 件（再試行するには tracks.youtube_locked = FALSE に更新）")
 
 
 YOUTUBE_VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
@@ -258,46 +282,57 @@ TAGS_SOURCE = "youtube_desc"
 TAGS_CONFIDENCE = 0.75  # Steam OST 説明文（0.9）より低め。動画の誤登録を完全には排除できないため
 
 
-def get_games_for_tag_extraction(limit: int) -> list[dict]:
-    """youtube_video_id が設定済みで、まだ youtube_desc タグを試みていないゲームを取得する。"""
-    done_rows = (
-        db.table("game_tags")
-        .select("game_id")
-        .eq("added_by", TAGS_SOURCE)
-        .execute()
-        .data or []
-    )
-    already_done = {r["game_id"] for r in done_rows}
+def get_games_for_tag_extraction(limit: int) -> tuple[list[dict], int, int]:
+    """youtube_video_id が設定済みで、まだ youtube_desc タグを試みていないゲームを取得する。
 
-    rows = (
-        db.table("games")
+    処理済み判定は game_tag_attempts で行う。「試したがタグが付かなかった」ゲームにも
+    記録が残るので、同じゲームを毎日 videos.list に投げ続けることはない。
+    候補は全件取得してから除外する（先に limit*N 件で打ち切ると、未処理のまま滞留した
+    ゲームが枠を占有して以降のゲームに永久に到達できなくなるため）。
+
+    Returns: (処理対象, 候補総数, 試行済み件数)
+    """
+    skip_ids = load_skip_ids(db, TAGS_SOURCE)
+    rows = paged(
+        lambda: db.table("games")
         .select("id, title, youtube_video_id")
         .not_.is_("youtube_video_id", "null")
         .order("created_at", desc=False)
-        .limit(limit * 3)  # 処理済み除外後に limit 件残るよう多めに取得
-        .execute()
-        .data or []
     )
-    candidates = [r for r in rows if r["id"] not in already_done]
-    return candidates[:limit]
+    candidates = [r for r in rows if r["id"] not in skip_ids]
+    return candidates[:limit], len(rows), len(skip_ids)
 
 
-def _fetch_videos_meta(video_ids: list[str]) -> dict[str, dict]:
-    """videos.list で複数動画のメタデータをまとめて取得する（50件/リクエスト = 1 unit）。"""
+def _fetch_videos_meta(video_ids: list[str]) -> tuple[dict[str, dict], set[str]]:
+    """videos.list で複数動画のメタデータをまとめて取得する（50件/リクエスト = 1 unit）。
+
+    Returns: (videoId → メタデータ, リクエスト自体が失敗した videoId の集合)
+
+    videos.list は削除済み・非公開の動画を 200 応答から黙って落とすため、
+    「リクエスト成功かつ結果に無い＝動画が存在しない（恒久）」と
+    「リクエスト自体が失敗（一時的）」を呼び出し側で区別できるよう分けて返す。
+    """
     meta: dict[str, dict] = {}
+    request_failed: set[str] = set()
     for i in range(0, len(video_ids), 50):
         chunk = video_ids[i:i + 50]
-        resp = http.get(YOUTUBE_VIDEOS_URL, params={
-            "part": "snippet,topicDetails,contentDetails",
-            "id": ",".join(chunk),
-            "key": YOUTUBE_API_KEY,
-        }, timeout=15)
+        try:
+            resp = http.get(YOUTUBE_VIDEOS_URL, params={
+                "part": "snippet,topicDetails,contentDetails",
+                "id": ",".join(chunk),
+                "key": YOUTUBE_API_KEY,
+            }, timeout=15)
+        except requests.RequestException as e:
+            print(f"  videos.list 通信エラー: {e}")
+            request_failed.update(chunk)
+            continue
         if resp.status_code != 200:
             print(f"  videos.list エラー: {resp.status_code} {resp.text[:100]}")
+            request_failed.update(chunk)
             continue
         for item in resp.json().get("items", []):
             meta[item["id"]] = item
-    return meta
+    return meta, request_failed
 
 
 def run_tags(limit: int) -> None:
@@ -307,16 +342,23 @@ def run_tags(limit: int) -> None:
     対象にする（issue #105 で実測した「実況・トレーラー・尺異常」を除外するルール）。
     誤登録の動画（例: 無関係な作業用BGMミックス）からタグを抽出すると
     ノイズになるため、検証をスキップしない。
+
+    検証で弾かれた動画・ムード語が出なかった動画も game_tag_attempts に記録する。
+    記録しないと「タグが付いていない＝未処理」と見なされ、同じゲームを毎日
+    videos.list に投げ直し、以降のゲームに永久に到達できなくなる。
     """
     print(f"YouTube 動画メタからムードタグ抽出 (上限: {limit} 件)")
 
-    games = get_games_for_tag_extraction(limit)
+    games, total_candidates, skipped = get_games_for_tag_extraction(limit)
     if not games:
-        print("対象ゲームはありません。")
+        print(f"対象ゲームはありません（候補 {total_candidates} 件はすべて試行済み）。")
         return
 
-    meta = _fetch_videos_meta([g["youtube_video_id"] for g in games])
-    print(f"{len(games)} 件を処理します（videos.list {(len(games) + 49) // 50} 回 = 同units消費）...\n")
+    meta, request_failed = _fetch_videos_meta([g["youtube_video_id"] for g in games])
+    print(
+        f"{len(games)} 件を処理します（候補 {total_candidates} 件 / 試行済み {skipped} 件、"
+        f"videos.list {(len(games) + 49) // 50} 回 = 同units消費）...\n"
+    )
 
     tag_rows = db.table("mood_tags").select("id, name").execute().data or []
     tag_id_map = {r["name"]: r["id"] for r in tag_rows}
@@ -324,12 +366,23 @@ def run_tags(limit: int) -> None:
     tagged = 0
     invalid = 0
     no_match = 0
+    unavailable = 0
 
     for game in games:
         title = game["title"]
-        item = meta.get(game["youtube_video_id"])
+        video_id = game["youtube_video_id"]
+        item = meta.get(video_id)
         if not item:
-            print(f"  [{title}] 動画メタ取得不可（削除・非公開の可能性）")
+            if video_id in request_failed:
+                # videos.list 自体が失敗した分。動画の状態は不明なので error として
+                # 記録し、一定期間後に再試行する。
+                print(f"  [{title}] videos.list 失敗（後日再試行）")
+                record(db, game["id"], TAGS_SOURCE, RESULT_ERROR, "videos_list_failed")
+            else:
+                # 200 応答に含まれなかった = 削除済み・非公開。再試行しても結果は同じ。
+                print(f"  [{title}] 動画が取得できず（削除・非公開）")
+                record(db, game["id"], TAGS_SOURCE, RESULT_INVALID, "video_unavailable")
+            unavailable += 1
             continue
 
         snippet = item.get("snippet", {})
@@ -348,14 +401,11 @@ def run_tags(limit: int) -> None:
         if not valid:
             print(f"  [{title}] SKIP（{reason}）")
             invalid += 1
+            record(db, game["id"], TAGS_SOURCE, RESULT_INVALID, reason)
             continue
 
         text = f"{video_title}. {snippet.get('description') or ''}"
         names = extract_tags(text, music_context=True)
-        if not names:
-            print(f"  [{title}] マッチなし")
-            no_match += 1
-            continue
 
         rows = []
         for name in names:
@@ -369,15 +419,19 @@ def run_tags(limit: int) -> None:
                 "added_by": TAGS_SOURCE,
             })
         if not rows:
+            print(f"  [{title}] マッチなし")
+            no_match += 1
+            record(db, game["id"], TAGS_SOURCE, RESULT_NO_MATCH, f"chars={len(text)}")
             continue
 
         db.table("game_tags").upsert(rows, on_conflict="game_id,tag_id").execute()
+        record(db, game["id"], TAGS_SOURCE, RESULT_TAGGED, f"tags={len(rows)}")
         print(f"  [{title}] → タグ付与: {', '.join(names)}")
         tagged += 1
 
     print(
-        f"\n完了 — タグ付与 {tagged} 件 / 動画不正で除外 {invalid} 件 / マッチなし {no_match} 件"
-        f"（対象 {len(games)} 件）"
+        f"\n完了 — タグ付与 {tagged} 件 / 動画不正で除外 {invalid} 件 / "
+        f"マッチなし {no_match} 件 / メタ取得不可 {unavailable} 件（対象 {len(games)} 件）"
     )
 
 
