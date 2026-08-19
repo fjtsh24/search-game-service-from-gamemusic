@@ -135,7 +135,7 @@ CREATE TABLE game_tag_flags (
   id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   game_id    UUID        NOT NULL REFERENCES games (id) ON DELETE CASCADE,
   tag_id     UUID        NOT NULL REFERENCES mood_tags (id) ON DELETE CASCADE,
-  user_id    UUID        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  user_id    UUID        REFERENCES users (id) ON DELETE CASCADE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (game_id, tag_id, user_id)
 );
@@ -245,8 +245,8 @@ CREATE POLICY "owner_insert" ON user_games FOR INSERT WITH CHECK (user_id = auth
 CREATE POLICY "owner_update" ON user_games FOR UPDATE USING (user_id = auth.uid());
 CREATE POLICY "owner_delete" ON user_games FOR DELETE USING (user_id = auth.uid());
 
-CREATE POLICY "owner_insert" ON game_tag_flags FOR INSERT WITH CHECK (user_id = auth.uid());
-CREATE POLICY "owner_read"   ON game_tag_flags FOR SELECT USING (user_id = auth.uid());
+CREATE POLICY "owner_insert" ON game_tag_flags FOR INSERT WITH CHECK (user_id IS NULL OR user_id = auth.uid());
+CREATE POLICY "owner_read"   ON game_tag_flags FOR SELECT USING (user_id IS NULL OR user_id = auth.uid());
 
 
 -- ── 初期データ（スキーマの一部として管理）────────────────────────────────────

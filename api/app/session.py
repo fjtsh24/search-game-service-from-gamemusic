@@ -49,3 +49,11 @@ async def require_session(request: Request) -> dict:
     if not session:
         raise HTTPException(status_code=401, detail="Session expired")
     return session
+
+
+async def optional_session(request: Request) -> dict | None:
+    """任意のセッション。未ログインは None を返す（401 を発生させない）。"""
+    session_id = request.cookies.get(COOKIE_NAME)
+    if not session_id:
+        return None
+    return await get_session(session_id)

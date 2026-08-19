@@ -15,6 +15,7 @@ on:
           - youtube
           - steam_backfill
           - steam
+          - steam_tag_search
           - game_tags
           - lastfm_similarities
       limit:
@@ -64,8 +65,11 @@ jobs:
       - name: Step 3b — トラック別 YouTube VideoID 補完（10件）
         run: python3 scripts/import_youtube_video_ids.py --mode tracks --limit 10
 
-      - name: Step 4 — Steam 新規ゲーム追加（5件）
+      - name: Step 4 — Steam 新規ゲーム追加（5件、OST DLC 起点）
         run: python3 scripts/import_steam_soundtracks.py --limit 5
+
+      - name: Step 4b — Steam「良質サントラ」タグ検索で新規ゲーム追加（5件）
+        run: python3 scripts/import_steam_tag_search.py --limit 5
 
       - name: Step 5 — Steam OST appID 発見（50件、APIベース）
         run: python3 scripts/import_steam_ost_data.py --phase discover --limit 50
@@ -191,6 +195,27 @@ jobs:
         run: |
           LIMIT=${{ inputs.limit || '100' }}
           python3 scripts/import_steam_soundtracks.py --limit "${LIMIT}"
+
+  steam_tag_search:
+    name: Steam「良質サントラ」タグ検索で新規ゲーム追加
+    if: github.event_name == 'workflow_dispatch' && inputs.job == 'steam_tag_search'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: scripts/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Run Steam tag search import
+        run: |
+          LIMIT=${{ inputs.limit || '50' }}
+          python3 scripts/import_steam_tag_search.py --limit "${LIMIT}"
 
   game_tags:
     name: Last.fm ゲームタグ付与
