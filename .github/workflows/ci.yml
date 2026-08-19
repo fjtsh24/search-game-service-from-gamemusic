@@ -68,6 +68,9 @@ jobs:
       - name: Test music_text_tags.py（標準ライブラリのみ・追加依存なし）
         run: python3 test_music_text_tags.py -v
 
+      - name: Test youtube_video_validation.py（標準ライブラリのみ・追加依存なし）
+        run: python3 test_youtube_video_validation.py -v
+
   # ── Next.js Web: Lint + Type check + Build ────────────────────────────────
   web:
     name: Web — Lint & Build

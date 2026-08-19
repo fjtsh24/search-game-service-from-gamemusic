@@ -18,6 +18,7 @@ on:
           - steam_tag_search
           - game_tags
           - ost_tags
+          - youtube_tags
           - lastfm_similarities
       limit:
         description: '処理件数の上限'
@@ -63,6 +64,9 @@ jobs:
 
       - name: Step 3b — トラック別 YouTube VideoID 補完（10件）
         run: python3 scripts/import_youtube_video_ids.py --mode tracks --limit 10
+
+      - name: Step 3c — YouTube 動画メタからムードタグ抽出（50件、videos.listのみ）
+        run: python3 scripts/import_youtube_video_ids.py --mode tags --limit 50
 
       - name: Step 4 — Steam 新規ゲーム追加（5件、OST DLC 起点）
         run: python3 scripts/import_steam_soundtracks.py --limit 5
@@ -260,6 +264,27 @@ jobs:
         run: |
           LIMIT=${{ inputs.limit || '100' }}
           python3 scripts/import_steam_ost_data.py --phase tags --limit "${LIMIT}"
+
+  youtube_tags:
+    name: YouTube 動画メタからムードタグ付与
+    if: github.event_name == 'workflow_dispatch' && inputs.job == 'youtube_tags'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: scripts/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Run YouTube description tag import
+        run: |
+          LIMIT=${{ inputs.limit || '100' }}
+          python3 scripts/import_youtube_video_ids.py --mode tags --limit "${LIMIT}"
 
   lastfm_similarities:
     name: Last.fm 作曲家間類似度更新
