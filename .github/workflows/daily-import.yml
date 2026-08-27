@@ -1,9 +1,9 @@
-name: Daily Data Import
+name: Weekly Data Import
 
 on:
   schedule:
-    # 毎日 JST 04:00（UTC 19:00）に自動実行
-    - cron: '0 19 * * *'
+    # 毎週月曜 JST 04:00（UTC 日曜 19:00）に自動実行
+    - cron: '0 19 * * 0'
   workflow_dispatch:
     inputs:
       job:
@@ -35,9 +35,9 @@ env:
   UPSTASH_REDIS_TOKEN: ${{ secrets.UPSTASH_REDIS_TOKEN }}
 
 jobs:
-  # ── 毎日自動実行: 優先度順の拡充パイプライン ──────────────────────────────
-  daily-enrichment:
-    name: 毎日データ拡充（タグ→説明文補完→YouTube→新規追加→OST取得→類似度更新）
+  # ── 毎週自動実行: 優先度順の拡充パイプライン ──────────────────────────────
+  weekly-enrichment:
+    name: 週次データ拡充（タグ→説明文補完→YouTube→新規追加→OST取得→類似度更新）
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
@@ -52,37 +52,37 @@ jobs:
       - name: Install dependencies
         run: pip install -r scripts/requirements.txt
 
-      - name: Step 1 — ゲームタグ付与（40件、locked スキップ）
-        run: python3 scripts/import_game_tags.py --limit 40
+      - name: Step 1 — ゲームタグ付与（20件、locked スキップ）
+        run: python3 scripts/import_game_tags.py --limit 20
 
 
-      - name: Step 2 — Steam 説明文バックフィル（30件）
-        run: python3 scripts/import_steam_soundtracks.py --backfill --limit 30
+      - name: Step 2 — Steam 説明文バックフィル（15件）
+        run: python3 scripts/import_steam_soundtracks.py --backfill --limit 15
 
-      - name: Step 3 — YouTube VideoID 既存補完（20件、locked スキップ）
-        run: python3 scripts/import_youtube_video_ids.py --limit 20
+      - name: Step 3 — YouTube VideoID 既存補完（10件、locked スキップ）
+        run: python3 scripts/import_youtube_video_ids.py --limit 10
 
-      - name: Step 3b — トラック別 YouTube VideoID 補完（10件）
-        run: python3 scripts/import_youtube_video_ids.py --mode tracks --limit 10
+      - name: Step 3b — トラック別 YouTube VideoID 補完（5件）
+        run: python3 scripts/import_youtube_video_ids.py --mode tracks --limit 5
 
-      - name: Step 3c — YouTube 動画メタからムードタグ抽出（50件、videos.listのみ）
-        run: python3 scripts/import_youtube_video_ids.py --mode tags --limit 50
+      - name: Step 3c — YouTube 動画メタからムードタグ抽出（25件、videos.listのみ）
+        run: python3 scripts/import_youtube_video_ids.py --mode tags --limit 25
 
-      - name: Step 4 — Steam 新規ゲーム追加（5件、OST DLC 起点）
-        run: python3 scripts/import_steam_soundtracks.py --limit 5
+      - name: Step 4 — Steam 新規ゲーム追加（3件、OST DLC 起点）
+        run: python3 scripts/import_steam_soundtracks.py --limit 3
 
-      - name: Step 4b — Steam「良質サントラ」タグ検索で新規ゲーム追加（5件）
-        run: python3 scripts/import_steam_tag_search.py --limit 5
+      - name: Step 4b — Steam「良質サントラ」タグ検索で新規ゲーム追加（3件）
+        run: python3 scripts/import_steam_tag_search.py --limit 3
 
-      - name: Step 5 — Steam OST appID 発見（50件、APIベース）
-        run: python3 scripts/import_steam_ost_data.py --phase discover --limit 50
+      - name: Step 5 — Steam OST appID 発見（25件、APIベース）
+        run: python3 scripts/import_steam_ost_data.py --phase discover --limit 25
 
-      - name: Step 5b — OST 説明文からムードタグ付与（50件、APIベース）
-        run: python3 scripts/import_steam_ost_data.py --phase tags --limit 50
+      - name: Step 5b — OST 説明文からムードタグ付与（25件、APIベース）
+        run: python3 scripts/import_steam_ost_data.py --phase tags --limit 25
 
-      - name: Step 6 — Steam OST ページ取得（10件、2分間隔）
+      - name: Step 6 — Steam OST ページ取得（5件、2分間隔）
         timeout-minutes: 30
-        run: python3 scripts/import_steam_ost_data.py --phase scrape --limit 10
+        run: python3 scripts/import_steam_ost_data.py --phase scrape --limit 5
 
       - name: Step 7 — 報告済み動画・タグの確認（要管理者レビュー）
         run: |
@@ -134,8 +134,8 @@ jobs:
               print("  対応後は該当 game_tags レコードを削除し、game_tag_flags もクリアしてください。")
           EOF
 
-      - name: Step 8 — Last.fm 作曲家類似度更新（新規作曲家優先 30件）
-        run: python3 scripts/import_lastfm_similarities.py --limit 30
+      - name: Step 8 — Last.fm 作曲家類似度更新（新規作曲家優先 15件）
+        run: python3 scripts/import_lastfm_similarities.py --limit 15
 
   # ── 手動トリガー: 個別ジョブ ──────────────────────────────────────────────
   youtube:

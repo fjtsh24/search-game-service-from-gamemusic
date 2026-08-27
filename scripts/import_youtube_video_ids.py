@@ -4,7 +4,11 @@ YouTube Data API v3 でゲームサントラ / トラック別の VideoID を取
 モード:
   --mode games  (デフォルト)
     games.youtube_video_id が NULL かつ youtube_locked=FALSE のゲームを対象に
-    OST 全体の動画を検索して UPDATE する。
+    OST 全体の動画を検索して UPDATE する。search.list で上位5件を取得し、
+    videos.list でメタを補って youtube_video_validation.py の判定
+    （ゲーム名一致・尺・実況/トレーラー除外）を通った最初の候補を採用する
+    （tags モードと同じ基準。旧ロジックは上位1件を無条件採用しており、
+    2026-08-27 の監査で 371 件中 92 件の誤登録が判明したため統一した）。
 
   --mode tracks
     tracks.youtube_video_id が NULL のトラックを対象に、
@@ -25,10 +29,11 @@ YouTube Data API v3 でゲームサントラ / トラック別の VideoID を取
 
 YouTube Data API は 1 クエリ = 100 units / 1 日の無料枠 = 10,000 units。
 videos.list は 50 件/リクエスト = 1 unit と非常に安い。
-  - games モード: 日次 20 件 = 2,000 units
-  - tracks モード: 日次 10 件 = 1,000 units
-  - tags モード: 日次 50 件 ≈ 1 unit（videos.list のみ、search は使わない）
-  合計 3,000 units/日 で余裕を保つ。
+週次バッチ（.github/workflows/daily-import.yml）での実行頻度・件数:
+  - games モード: 週次 10 件 = 1,000 units
+  - tracks モード: 週次 5 件 = 500 units
+  - tags モード: 週次 25 件 ≈ 1 unit（videos.list のみ、search は使わない）
+  合計 1,500 units/回 で余裕を保つ。
 
 使い方:
   python3 scripts/import_youtube_video_ids.py [--limit N] [--mode games|tracks]
@@ -88,15 +93,22 @@ def _title_matches(game_title: str, video_title: str) -> bool:
     return matched >= max(1, len(ascii_words) // 2)
 
 
-def search_youtube(query: str, game_title: str = "") -> str | None:
-    """YouTube で検索して上位 1 件の videoId を返す。
-    game_title が指定された場合、動画タイトルとのキーワードマッチを検証する。
+def search_youtube_valid_video(game_title: str) -> str | None:
+    """OST 全体の動画を YouTube で検索し、is_valid_ost_video() の判定を通った
+    最初の候補の videoId を返す。
+
+    2026-08-27 の品質監査で、search.list 上位1件を無条件採用する旧ロジックが
+    371件中92件（別ゲームの動画・実況/トレーラー等）を誤登録していたことが判明した
+    （--mode tags で使っている youtube_video_validation.py の判定がここでは
+    一切適用されていなかったため）。search 結果を複数件取得し、videos.list で
+    メタデータ（尺・カテゴリ・トピック）を補ってから判定することで、tags モードと
+    同じ基準を新規登録にも適用する。
     """
     resp = http.get(YOUTUBE_SEARCH_URL, params={
         "part": "id,snippet",
-        "q": query,
+        "q": f"{game_title} soundtrack",
         "type": "video",
-        "maxResults": 1,
+        "maxResults": 5,
         "key": YOUTUBE_API_KEY,
     }, timeout=10)
 
@@ -104,22 +116,37 @@ def search_youtube(query: str, game_title: str = "") -> str | None:
         print(f"  YouTube API エラー: {resp.status_code} {resp.text[:100]}")
         return None
 
-    items = resp.json().get("items", [])
-    if not items:
+    candidate_ids = [
+        item["id"].get("videoId")
+        for item in resp.json().get("items", [])
+        if item["id"].get("videoId")
+    ]
+    if not candidate_ids:
         return None
 
-    item = items[0]
-    video_id = item["id"].get("videoId")
-    if not video_id:
-        return None
+    meta, _ = _fetch_videos_meta(candidate_ids)
+    for video_id in candidate_ids:
+        item = meta.get(video_id)
+        if not item:
+            continue
+        snippet = item.get("snippet", {})
+        video_title = snippet.get("title", "")
+        channel_title = snippet.get("channelTitle", "")
+        category_id = snippet.get("categoryId")
+        topics = [
+            t.split("/")[-1]
+            for t in item.get("topicDetails", {}).get("topicCategories", [])
+        ]
+        duration = parse_iso8601_duration(item.get("contentDetails", {}).get("duration"))
 
-    if game_title:
-        video_title = item.get("snippet", {}).get("title", "")
-        if not _title_matches(game_title, video_title):
-            print(f"  SKIP（タイトル不一致）: 動画='{video_title}'")
-            return None
+        valid, reason = is_valid_ost_video(
+            game_title, video_title, channel_title, category_id, topics, duration,
+        )
+        if valid:
+            return video_id
+        print(f"  SKIP候補（{reason}）: 動画='{video_title}'")
 
-    return video_id
+    return None
 
 
 _GENERIC_TRACK_RE = re.compile(
@@ -194,8 +221,7 @@ def run_games(limit: int) -> None:
 
     for game in games:
         title = game["title"]
-        query = f"{title} soundtrack"
-        video_id = search_youtube(query, game_title=title)
+        video_id = search_youtube_valid_video(title)
 
         if video_id:
             db.table("games").update({"youtube_video_id": video_id}).eq("id", game["id"]).execute()
