@@ -25,10 +25,11 @@ YouTube Data API v3 でゲームサントラ / トラック別の VideoID を取
 
 YouTube Data API は 1 クエリ = 100 units / 1 日の無料枠 = 10,000 units。
 videos.list は 50 件/リクエスト = 1 unit と非常に安い。
-  - games モード: 日次 20 件 = 2,000 units
-  - tracks モード: 日次 10 件 = 1,000 units
-  - tags モード: 日次 50 件 ≈ 1 unit（videos.list のみ、search は使わない）
-  合計 3,000 units/日 で余裕を保つ。
+週次バッチ（.github/workflows/daily-import.yml）での実行頻度・件数:
+  - games モード: 週次 10 件 = 1,000 units
+  - tracks モード: 週次 5 件 = 500 units
+  - tags モード: 週次 25 件 ≈ 1 unit（videos.list のみ、search は使わない）
+  合計 1,500 units/回 で余裕を保つ。
 
 使い方:
   python3 scripts/import_youtube_video_ids.py [--limit N] [--mode games|tracks]
