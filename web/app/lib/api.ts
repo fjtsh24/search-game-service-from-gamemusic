@@ -83,8 +83,13 @@ export type Composer = {
   games: Game[];
 };
 
-async function apiFetch<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, { cache: "no-store" });
+// revalidate 省略時は no-store（検索など、常に最新が必要な呼び出し用）。
+// 指定時は Next.js の Data Cache で revalidate 秒ごとに再検証する（公開の一覧・詳細データ用）。
+async function apiFetch<T>(path: string, revalidate?: number): Promise<T> {
+  const res = await fetch(
+    `${API_URL}${path}`,
+    revalidate !== undefined ? { next: { revalidate } } : { cache: "no-store" }
+  );
   if (!res.ok) throw new Error(`API error: ${res.status} ${path}`);
   return res.json();
 }
@@ -137,21 +142,21 @@ export const api = {
     const params = new URLSearchParams({ limit: String(limit) });
     if (tagId) params.set("tag_id", tagId);
     if (random) params.set("random", "true");
-    return apiFetch<Game[]>(`/games?${params}`);
+    return apiFetch<Game[]>(`/games?${params}`, 60);
   },
 
   getGame: (id: string) =>
-    apiFetch<GameDetail>(`/games/${id}`),
+    apiFetch<GameDetail>(`/games/${id}`, 60),
 
   getSimilarGames: (id: string) =>
-    apiFetch<Game[]>(`/games/${id}/similar`),
+    apiFetch<Game[]>(`/games/${id}/similar`, 60),
 
   getComposer: (id: string) =>
-    apiFetch<Composer>(`/composers/${id}`),
+    apiFetch<Composer>(`/composers/${id}`, 60),
 
   listTags: () =>
-    apiFetch<Tag[]>(`/tags`),
+    apiFetch<Tag[]>(`/tags`, 300),
 
   getTag: (id: string) =>
-    apiFetch<Tag>(`/tags/${id}`),
+    apiFetch<Tag>(`/tags/${id}`, 300),
 };
