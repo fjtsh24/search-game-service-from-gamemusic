@@ -87,7 +87,7 @@ _OST_KEYWORDS = ("soundtrack", "ost", "music")
 
 http = requests.Session()
 http.headers.update({
-    "User-Agent": "GameMusicDiscovery/0.1.0 (hobby project; contact: rob.rom.room@gmail.com)",
+    "User-Agent": "GameMusicDiscovery/0.1.0 (hobby project)",
     "Referer": "https://store.steampowered.com/",
 })
 
