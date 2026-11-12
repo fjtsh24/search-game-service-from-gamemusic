@@ -31,9 +31,9 @@
 | # | 作業 | 状態 |
 |---|---|---|
 | 1 | 週次バッチ（Weekly Data Import）の無効化 | 済（2026-11-12） |
-| 2 | 利用者データ削除（users / user_games / Redis セッション） | |
-| 3 | 公開環境停止（Vercel / Fly.io / Supabase / Upstash） | Fly.io 済（2026-11-12） |
-| 4 | API キー失効（Steam Web API / YouTube Data API / Last.fm）・GitHub Secrets 削除 | |
+| 2 | 利用者データ削除（users / user_games / Redis セッション） | 済（Supabase・Upstash 削除に伴い） |
+| 3 | 公開環境停止（Vercel / Fly.io / Supabase / Upstash） | 済（2026-11-12） |
+| 4 | API キー失効（Steam Web API / YouTube Data API / Last.fm）・GitHub Secrets 削除・Fly デプロイトークン失効 | 済（2026-11-12） |
 | 5 | 本ドキュメント追加・リポジトリのアーカイブ | |
 
 ## 5. 公開リポジトリとして残すものの倫理チェック
