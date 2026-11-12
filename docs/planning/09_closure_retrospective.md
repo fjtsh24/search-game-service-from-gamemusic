@@ -32,7 +32,7 @@
 |---|---|---|
 | 1 | 週次バッチ（Weekly Data Import）の無効化 | 済（2026-11-12） |
 | 2 | 利用者データ削除（users / user_games / Redis セッション） | |
-| 3 | 公開環境停止（Vercel / Fly.io / Supabase / Upstash） | |
+| 3 | 公開環境停止（Vercel / Fly.io / Supabase / Upstash） | Fly.io 済（2026-11-12） |
 | 4 | API キー失効（Steam Web API / YouTube Data API / Last.fm）・GitHub Secrets 削除 | |
 | 5 | 本ドキュメント追加・リポジトリのアーカイブ | |
 
